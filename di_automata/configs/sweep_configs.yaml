@@ -1,0 +1,20 @@
+method: bayes
+metric: 
+  name: train.loss
+  goal: minimize
+name: lr_sweep
+# program: run.py
+# command: 
+#   - ${env}
+#   - ${interpreter}
+#   - ${program}
+#   - --file_path
+#   - ${args_json_file}
+parameters: 
+  default_lr: 
+    distribution: log_uniform
+    min: 0.0001
+    max: 0.1
+early_terminate: 
+  type: hyperband
+  min_iter: 5

@@ -1,0 +1,48 @@
+dataset_type: PalindromeDataset # Needs to be strings that are same as class names
+model_type: MLP
+num_training_iter: 10000
+
+# Optimization configuration
+optimization:
+  optimizer_type: SGD
+  default_lr: 0.01
+  optimizer_kwargs: {}
+  weight_decay: 0.0
+  clip_grad: inf
+  cosine_lr_schedule: false
+
+# Dataset configuration
+dataset:
+  filename: PalindromeDataset_20_10000 # Of type DatasetClass_{n}_{dataset_size}.csv
+  data_folder: data
+  input_length: 20
+  dataset_size: 100000
+  p_prob: 0.5
+  input_col_name: "binary_string"
+  label_col_name: "label"
+
+# DataLoader configuration
+dataloader:
+  train_bs: 64
+  test_bs: 32
+  num_workers: 4
+  train_fraction: 0.95
+  shuffle_train: true
+  seed: 42
+
+loss_threshold: 0.01
+eval_frequency: 20
+num_eval_batches: 20
+
+# MLP configuration
+mlp_config:
+  hidden_sizes: [10, 10]
+  output_size: 1
+  weight_init: KAIMING
+  add_bias: true
+
+log_to_wandb: true # Set to false if testing only
+save_model_as_artifact: true
+wandb_project_name: "ib-fcnn"
+model_save_path: "trained_models"
+sweep: true
