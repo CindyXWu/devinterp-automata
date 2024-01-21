@@ -1,4 +1,4 @@
-# ib-fcnn
+# Devinterp for Automata Shortcuts in NNs
 
 # Installation
 1. Install the required packages:
@@ -10,4 +10,3 @@ pip install -r requirements.txt
 ```
 pip install -e .
 ```
-This step is important for being able to treat the folder ib_fcnn as a package without reinstallation with changes.
