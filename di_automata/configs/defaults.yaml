@@ -1,9 +1,7 @@
-dataset_type: PalindromeDataset # Needs to be strings that are same as class names
-model_type: MLP
-num_training_iter: 10000
+dataset_type: PARITY
+model_type: NANO_GPT
 
-# Optimization configuration
-optimization:
+optimizer_config:
   optimizer_type: SGD
   default_lr: 0.01
   optimizer_kwargs: {}
@@ -11,18 +9,18 @@ optimization:
   clip_grad: inf
   cosine_lr_schedule: false
 
-# Dataset configuration
-dataset:
-  filename: PalindromeDataset_20_10000 # Of type DatasetClass_{n}_{dataset_size}.csv
+dataset_config:
   data_folder: data
   input_length: 20
-  dataset_size: 100000
-  p_prob: 0.5
-  input_col_name: "binary_string"
-  label_col_name: "label"
+  size: 10000
+  seed: 42
+  length: 20
+  random_length: False
 
-# DataLoader configuration
-dataloader:
+parity_config: # Empty by default, just here for clarity
+
+dataloader_config:
+  type: Parity
   train_bs: 64
   test_bs: 32
   num_workers: 4
@@ -30,19 +28,54 @@ dataloader:
   shuffle_train: true
   seed: 42
 
+num_training_iter: 10000
 loss_threshold: 0.01
 eval_frequency: 20
 num_eval_batches: 20
 
-# MLP configuration
-mlp_config:
-  hidden_sizes: [10, 10]
-  output_size: 1
-  weight_init: KAIMING
-  add_bias: true
+nano_gpt_config:
+  block_size: 10
+  vocab_size: 2 # Will be updated automatically based on dataset
+  output_vocab_size: 2 # Will be updated automatically based on dataset
+  n_layers: 3
+  n_heads: 4
+  embed_dim: 256
+  dropout: 0.0
+  is_causal: true
 
-log_to_wandb: true # Set to false if testing only
-save_model_as_artifact: true
-wandb_project_name: "ib-fcnn"
-model_save_path: "trained_models"
-sweep: true
+rlct_config:
+  sampling_method: SGLD
+  sigma: 0.25
+  sgld_kwargs:
+    lr: 5e-7
+    noise_level: 1.0
+    weight_decay: 3e-7
+    elasticity: 1.0
+    temperature: "adaptive"
+    num_samples: 10000 # Default could also be length of dataset, but here have iterable
+  sgnht_kwargs:
+    lr: 5e-7
+    diffusion_factor: 0.01
+    bounding_box_size: 0.5
+    num_samples: 10000 # Default could also be length of dataset, but here have iterable
+  num_chains: 10
+  num_draws: 100
+  num_burnin_steps: 0 
+  num_steps_bw_draws: 1
+  batch_size: 1024
+  cores: 1
+  seed:
+    # Default: None. Can be an int or a list of ints.
+    # Example: 1234 or [1234, 5678]
+  pbar: true  # Progress bar
+  verbose: true
+  return_weights: true
+  use_distill_loss: true
+  save_results: true
+
+wandb_config:
+  log_to_wandb: true # Set to false if testing only
+  save_model_as_artifact: true
+  wandb_project_name: "ib-fcnn"
+  model_save_path: "trained_models"
+  sweep: true

@@ -9,11 +9,17 @@ from hydra.core.config_store import ConfigStore
 from typing import Dict
 
 from create_sweep import construct_sweep_config, load_config
+from config_setup import MainConfig, ConfigType
+from di_automata.constructors import model_constructor, optimizer_constructor, create_dataloaders, get_dataset_output_size, change_frac_filename
+from devinterp.optim.sgld import SGLD
+from devinterp.optim.sgnht import SGNHT
+from devinterp.slt import estimate_learning_coeff
 from train_utils import train, create_dataloaders, create_or_load_dataset, model_constructor, optimizer_constructor
 from config_setup import MainConfig
 
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 
 # Register the defaults from the structured dataclass config schema:

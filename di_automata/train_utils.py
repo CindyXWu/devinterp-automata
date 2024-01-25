@@ -9,13 +9,11 @@ import wandb
 
 import torch
 import torch.optim as optim
+import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import DataLoader, random_split
 
-from ib_fcnn.architectures.mlp import *
-from ib_fcnn.config_setup import *
-from ib_fcnn.datasets.parity import ParityDataset
-from ib_fcnn.datasets.palindrome import PalindromeDataset
+from di_automata.config_setup import *
 
 from typing import Tuple, List, Union
 
@@ -152,12 +150,7 @@ def evaluate(
     else: # For evaluating on test set only
         test_preds = ''.join([str(int(p)) for p in predictions.tolist()])
         return accuracy, test_preds
-
-
-# TODO
-def calculate_gp():
-    pass
-
+    
 
 def create_or_load_dataset(dataset_type: str, dataset_config: DatasetConfig) -> Dataset:
     """Create or load an existing dataset based on a specified filepath and dataset type."""
@@ -193,39 +186,20 @@ def save_to_csv(
     data = [(str(x.numpy()), int(y.numpy())) for x, y in dataset]
     df = pd.DataFrame(data, columns=[input_col_name, label_col_name])
     df.to_csv(filename, index=False)
-    
-
-# TODO: complete pass
-def model_constructor(config: MainConfig) -> nn.Module:
-    """Constructs a model based on a specified model type."""
-    if config.model_type == ModelType.MLP:
-        model = mlp_constructor(
-            input_size=config.dataset.input_length,
-            hidden_sizes=config.mlp_config.hidden_sizes,
-            output_size=config.mlp_config.output_size,
-            bias=config.mlp_config.add_bias,
-        )
-    elif config.model_type == ModelType.RNN:
-        pass
-    elif config.model_type == ModelType.LSTM:
-        pass
-    else:
-        raise ValueError(f"Invalid model type: {config.model_type}")
-    return model
 
 
 def optimizer_constructor(config: MainConfig, model: nn.Module) -> optim.Optimizer:
-    match config.optimization.optimizer_type:
+    match config.optimizer_config.optimizer_type:
         case OptimizerType.SGD:
             optim_constructor = torch.optim.SGD
         case OptimizerType.ADAM:
             optim_constructor = torch.optim.Adam
         case _:
-            raise ValueError(f"Unknown optimizer type: {config.optimization.optimizer_type}")
+            raise ValueError(f"Unknown optimizer type: {config.optimizer_config.optimizer_type}")
     optim = optim_constructor(
         params=model.parameters(),
-        lr=config.optimization.default_lr,
-        **config.optimization.optimizer_kwargs,
+        lr=config.optimizer_config.default_lr,
+        **config.optimizer_config.optimizer_kwargs,
     )
     return optim
 

@@ -1,1 +1,1 @@
-ib_fcnn
+di_automata
