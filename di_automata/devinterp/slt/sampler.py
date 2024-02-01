@@ -11,17 +11,17 @@ from torch.multiprocessing import cpu_count, get_context
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from mechanistic_distillation.config_schemas import ConfigBase
-from mechanistic_distillation.devinterp.optim.sgld import SGLD
-from mechanistic_distillation.constructors import construct_dataloaders, construct_model, construct_optimizer, initialise_model
-from mechanistic_distillation.distill_losses import predictive_kl_loss
+from di_automata.config_setup import MainConfig
+from di_automata.devinterp.optim.sgld import SGLD
+from di_automata.constructors import construct_model
+from di_automata.losses import predictive_kl_loss
 
 
 def sample_single_chain(
     ref_model: nn.Module,
     loader: DataLoader,
     criterion: Callable,
-    config: ConfigBase,
+    config: MainConfig,
     checkpoint: dict,
     num_draws=100,
     num_burnin_steps=0,
@@ -111,7 +111,7 @@ def sample(
     model: torch.nn.Module,
     loader: DataLoader,
     criterion: Callable,
-    config: ConfigBase,
+    config: MainConfig,
     checkpoint: dict,
     sampling_method: Type[torch.optim.Optimizer] = SGLD,
     optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
@@ -196,7 +196,7 @@ def estimate_rlct(
     model: torch.nn.Module,
     loader: DataLoader,
     criterion: Callable,
-    config: ConfigBase,
+    config: MainConfig,
     checkpoint: dict,
     sampling_method: Type[torch.optim.Optimizer] = SGLD,
     optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,

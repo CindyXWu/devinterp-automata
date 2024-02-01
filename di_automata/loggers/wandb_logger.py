@@ -1,9 +1,8 @@
-from typing import Any, Optional, Sequence, Union
-import numpy as np
+from typing import Optional, Sequence, Union, Dict
 import numpy.typing as npt
 
 import wandb
-from di_automata.loggers.logger import *
+from di_automata.loggers.logger import LoggerBase
 
 
 class WandbLogger(LoggerBase):

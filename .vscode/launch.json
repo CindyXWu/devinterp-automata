@@ -1,0 +1,36 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "single hydra parity",
+            "type": "python",
+            "request": "launch",
+            "program": "C:/Users/rageo/Documents/ML Projects/devinterp-automata/scripts/run.py", // Replace with the path to your specific Python file
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "HYDRA_FULL_ERROR": "1"
+            },
+            "args": [
+            ]
+        },
+        {
+            "name": "multi hydra abab",
+            "type": "python",
+            "request": "launch",
+            "program": "C:/Users/rageo/Documents/ML Projects/devinterp-automata/scripts/run.py", // Replace with the path to your specific Python file
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "HYDRA_FULL_ERROR": "1"
+            },
+            "args": [
+                "-m",
+                "+abab_config=abab_config_file", // TODO: make config separate for datasets
+            ]
+        }
+    ]
+}

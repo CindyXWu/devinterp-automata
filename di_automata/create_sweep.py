@@ -1,7 +1,9 @@
 import yaml
+from typing import Dict
 
 
-def load_config(file_path):
+def load_config(file_path) -> Dict:
+    config = {}
     with open(file_path, 'r') as stream:
         try:
             config = yaml.safe_load(stream)

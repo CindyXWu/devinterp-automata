@@ -19,12 +19,12 @@ import itertools
 import math
 from sympy.combinatorics.permutations import Permutation
 
-from di_automata.config_setup import DatasetConfig
+from di_automata.config_setup import MainConfig
 import datasets
 import numpy as np
 from copy import copy
 
-# check python version
+# Check Python version
 import sys
 major, minor = sys.version_info[:2]
 version = major + 0.1*minor
@@ -54,7 +54,7 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
     VERSION = datasets.Version("0.0.0")
     BUILDER_CONFIGS = []
     
-    def __init__(self, config: DatasetConfig, **kwargs):
+    def __init__(self, config: MainConfig, **kwargs):
         super().__init__(**kwargs)
         
         """
@@ -64,7 +64,7 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
         """
         self.dataset_map = {
             'abab': ABABAutomaton,
-            'add': AdderAutomaton,
+            'adder': AdderAutomaton,
             'alternating': AlternatingAutomaton,
             'cyclic': CyclicAutomaton,
             'dihedral': DihedralAutomaton,
@@ -122,7 +122,7 @@ class Automaton:
     """
     This is a parent class that must be inherited.
     """
-    def __init__(self, data_config: DatasetConfig):
+    def __init__(self, data_config: MainConfig):
         self.data_config = data_config
 
         if hasattr(self.data_config, 'seed'):

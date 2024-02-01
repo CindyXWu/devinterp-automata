@@ -9,8 +9,8 @@ from hydra.core.config_store import ConfigStore
 from typing import Dict
 
 from create_sweep import construct_sweep_config, load_config
-from config_setup import MainConfig, ConfigType
-from di_automata.constructors import model_constructor, optimizer_constructor, create_dataloaders, get_dataset_output_size, change_frac_filename
+from config_setup import MainConfig
+from di_automata.constructors import model_constructor, optimizer_constructor, create_dataloaders
 from devinterp.optim.sgld import SGLD
 from devinterp.optim.sgnht import SGNHT
 from devinterp.slt import estimate_learning_coeff
@@ -33,11 +33,11 @@ def main(config: MainConfig) -> None:
     logging.info(f"Hydra current working directory: {os.getcwd()}")
 
     logger_params = {
-    "name": f"{config.dataset_type}_{config.dataset.input_length}_{config.model_type}",
-    "project": config.wandb_project_name,
-    "settings": wandb.Settings(start_method="thread"),
-    "config": omegaconf.OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
-    "mode": "disabled" if not config.log_to_wandb else "online",
+        "name": config.run_name,
+        "project": config.wandb_config.wandb_project_name,
+        "settings": wandb.Settings(start_method="thread"),
+        "config": omegaconf.OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
+        "mode": "disabled" if not config.is_wandb_enabled else "online",
     }
     wandb.init(**logger_params)
     # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below

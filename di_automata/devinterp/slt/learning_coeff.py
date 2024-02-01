@@ -5,16 +5,17 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from mechanistic_distillation.config_schemas import ConfigBase
-from mechanistic_distillation.devinterp.optim.sgld import SGLD
-from mechanistic_distillation.devinterp.slt.sampler import sample
+from di_automata.config_setup import MainConfig
+from di_automata.devinterp.optim.sgld import SGLD
+from di_automata.devinterp.slt.sampler import sample
 
+"""TODO: REFACTOR THIS CODE FOR NEW CODEBASE."""
 
 def estimate_learning_coeff(
     model: torch.nn.Module,
     loader: DataLoader,
     criterion: Callable,
-    config: ConfigBase,
+    config: MainConfig,
     checkpoint: dict,
     sampling_method: Type[torch.optim.Optimizer] = SGLD,
     optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
@@ -59,7 +60,7 @@ def estimate_learning_coeff_with_summary(
     model: torch.nn.Module,
     loader: DataLoader,
     criterion: Callable,
-    config: ConfigBase,
+    config: MainConfig,
     checkpoint: dict,
     sampling_method: Type[torch.optim.Optimizer] = SGLD,
     optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,

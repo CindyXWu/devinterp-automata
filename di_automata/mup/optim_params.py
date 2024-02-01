@@ -7,7 +7,7 @@ in the mu-parameterisation given in:
 from typing import Sequence, TypedDict, Union
 import torch.nn as nn
 
-from mechanistic_distillation.mup.inf_types import InfType, InfParam
+from di_automata.mup.inf_types import InfType, InfParam
 
 
 class ParamGroup(TypedDict):

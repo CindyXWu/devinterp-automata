@@ -3,16 +3,14 @@ The different "types" of parameters of the model. These will be initialised diff
 and will have their optimiser's parameters scaled differently, depending on how they behave
 in the infinite width limit.
 """
-
 from enum import Enum
-from operator import itemgetter
-from typing import NamedTuple, Sequence, Union
+from typing import NamedTuple, Sequence
 
 import torch
 import torch.nn as nn
-from mechanistic_distillation.architectures.nano_gpt import LayerNorm
 
-from mechanistic_distillation.mup.utils import get_param_name
+from di_automata.architectures.nano_gpt import LayerNorm
+from di_automata.mup.utils import get_param_name
 
 
 class InfType(Enum):

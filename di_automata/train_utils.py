@@ -1,172 +1,213 @@
-"""Training, eval, dataloader setup and model setup."""
-import os
+""""Make Run class which contains all relevant logic for instantiating and training."""
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import wandb
+import logging
+import os
+import subprocess
+from omegaconf import OmegaConf
 
 import torch
-import torch.optim as optim
+from torch import Tensor
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import DataLoader, random_split
+from typing import Tuple, List, Dict, TypedDict, TypeVar
 
+from di_automata.devinterp.optim.sgld import SGLD
+from di_automata.devinterp.optim.sgnht import SGNHT
+from di_automata.devinterp.slt import estimate_learning_coeff
 from di_automata.config_setup import *
-
-from typing import Tuple, List, Union
+from di_automata.constructors import (
+    construct_model, 
+    optimizer_constructor, 
+    initialise_model,
+    create_dataloader_hf
+)
+Sweep = TypeVar("Sweep")
 
 # Path to root dir (with setup.py)
 PROJECT_ROOT = Path(__file__).parent.parent
 
-def check_valid_dataloader(dataloader: DataLoader) -> None:
-    try:
-        iter(dataloader)
-    except TypeError:
-        raise ValueError("Invalid dataloader provided")
+
+class StateDict(TypedDict):
+    model: Dict
+    optimizer: Dict
+    scheduler: Dict
+    
+    
+def state_dict(model, optimizer, scheduler) -> StateDict:
+    """Used for model saving."""
+    return {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": {k: v for k,v in scheduler.state_dict().items() if not callable(v)}
+    }
     
 
-def save_model(
-    path: str, 
-    epoch: int, 
-    model: nn.Module, 
-    optimizer: optim.Optimizer, 
-    train_loss: List[float], 
-    train_acc: List[float], 
-    test_acc: List[float],
-    final_acc: float,
-    test_preds: str
-    ) -> None:
-    torch.save({'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss_hist': train_loss,
-                'train_acc': train_acc,
-                'test_acc': test_acc,
-                'final_acc': final_acc,
-                'test_preds': test_preds
-                },
-                path)
+class Run:
+    def __init__(
+        self, 
+        config: MainConfig,
+    ):
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.config = config
+        
+        self._set_logger()
+        
+        self.train_loader = create_dataloader_hf(self.config)
+        
+        self.model, param_inf_properties = construct_model(config)
+        self.model.to(self.device)
+        # Initialise the model (possibly with muP, link: https://arxiv.org/pdf/2203.03466.pdf)
+        initialise_model(config, self.model, param_inf_properties)
+        
+        self.optimizer, self.scheduler = optimizer_constructor(config, self.model, param_inf_properties)
     
-
-def train(model: nn.Module, 
-          train_loader: DataLoader, 
-          test_loader: DataLoader, 
-          default_lr: float, 
-          epochs: int, 
-          loss_threshold: float,
-          num_eval_batches: int,
-          optimizer: optim.Optimizer,
-          project: str,
-          model_save_path: str,
-          device: torch.device = torch.device('cuda')
-          ) -> None:
-    """
-    Assume model already on device and optimizer already initialised with model parameters, lr and momentum (see optimizer config).
-    Args:
-        lr: Fixed based LR. See cosine LR in optimizer for more information on types of LR.
-        epochs: Max epochs to train for. In this configuration where training is halted after a certain loss is achieved, often training will not reach this upper bound.
-        loss_threshold: Training will stop when the batch average training loss is below this threshold.
-        optimizer: Optimizer to use for training.
-        project: Name of the project for wandb.
-        model_save_path: Path to save the model.
-    """
-    criterion = nn.BCEWithLogitsLoss()
-    test_acc_list, train_acc_list = [], []
-
-    for epoch in range(epochs):
-        print("Epoch: ", epoch)
-        train_loss = []
-        model.train()
+    def train(self) -> None:
+        criterion = nn.CrossEntropyLoss()
+        self.train_acc_list, self.train_loss_list = [], []
+        self.model.train()
+        self.progress_bar = tqdm(total=self.config.num_training_iter)
         
-        for inputs, labels in tqdm(train_loader, desc=f"Training iterations within epoch {epoch}"):
-            inputs, labels = inputs.to(device), labels.to(device)
-            scores = model(inputs)
+        for epoch in range(self.config.num_epochs):
+            train_loss = []
+            
+            for inputs, labels in self.train_loader:
+                print(f"Training epoch {epoch}")
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                logits = self.model(inputs)
 
-            optimizer.zero_grad()
-            loss = criterion(scores.squeeze(), labels)
-            loss.backward()
-            optimizer.step()
-            train_loss.append(loss.item())
+                self.optimizer.zero_grad()
+                loss = criterion(logits, labels)
+                loss.backward()
+                self.optimizer.step()
+                self.scheduler.step()
+                train_loss.append(loss.item())
+                self.progress_bar.update()
+                
+            train_loss = self._evaluation_step(epoch)
+            
+            avg_train_loss = np.mean(train_loss)
+            if avg_train_loss < self.config.loss_threshold:
+                print(f'Average training loss {avg_train_loss:.3f} is below the threshold {self.config.loss_threshold}. Training stopped.')
+                break
 
-        # Evaluate at end of epoch
-        train_acc = evaluate(model, train_loader, subset=True, num_eval_batches=num_eval_batches)
-        test_acc, fn_rep = evaluate(model, test_loader, subset=False)
-        train_acc_list.append(train_acc)
-        test_acc_list.append(test_acc)
-        print(f'Project {project}, Epoch: {epoch}, Train accuracy: {train_acc}, Test accuracy: {test_acc}, LR {default_lr}, Loss Threshold: {loss_threshold}')
-        wandb.log({"Train Acc": train_acc, "Test Acc": test_acc, "Loss": np.mean(train_loss), "LR": default_lr, "Function Representation on Test Set": fn_rep}, step=epoch)
+        self._save_model()
         
-        avg_train_loss = np.mean(train_loss)
-        if avg_train_loss < loss_threshold:  # check if the average training loss is below the threshold
-            print(f'Average training loss {avg_train_loss:.3f} is below the threshold {loss_threshold}. Training stopped.')
-            break
+        if self.config.is_wandb_enabled:
+            wandb.finish()
+    
+    def _evaluation_step(self, epoch) -> float:
+        """TODO: consider test accuracy and loss."""
+        train_acc, train_loss = evaluate(self.model, self.train_loader, subset=True, num_eval_batches=self.config.num_eval_batches)
+        self.train_acc_list.append(train_acc)
+        self.train_loss_list.append(train_loss)
+        # test_acc, test_loss = evaluate(self.model, self.test_loader, subset=False)
+        # self.test_acc_list.append(test_acc)
+        
+        self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.config.optimizer_config.default_lr}, Loss Threshold: {self.config.loss_threshold}')
+        
+        # wandb.log({"Train Acc": train_acc, "Test Acc": test_acc, "Train Loss": np.mean(train_loss), "Test Loss": np.mean(test_loss), "LR": self.config.optimizer_config.default_lr}, step=epoch)
+        wandb.log({"Train Acc": train_acc, "Train Loss": np.mean(train_loss), "LR": self.config.optimizer_config.default_lr}, step=epoch)
+        
+        return train_loss
 
-    final_acc, test_preds = evaluate(model, test_loader)
-    save_model(f"{model_save_path}_final", epoch, model, optimizer, train_loss, train_acc_list, test_acc_list, final_acc, test_preds)
+    # TODO: edit config run name in config setup file
+    def _save_model(self):
+        if self.config.wandb_config.save_model_as_artifact:
+            model_artifact = wandb.Artifact("model", type="model", description="The trained model state_dict")
+            model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
+            wandb.log_artifact(model_artifact)
+        if self.config.save_local:
+            file_path = f"{self.config.model_save_path}/{self.config.run_name}"
+            state = state_dict(self.model, self.optimizer, self.scheduler)
+            data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
+            torch.save(dict(state, **data), file_path)
+            
+    def _set_logger(self) -> None:
+        """Currently uses wandb as default."""
+        logging.info(f"Hydra current working directory: {os.getcwd()}")
+        logger_params = {
+            "name": self.config.run_name,
+            "project": self.config.wandb_config.wandb_project_name,
+            "settings": wandb.Settings(start_method="thread"),
+            "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
+            "mode": "disabled" if not self.config.is_wandb_enabled else "online",
+        }
+        wandb.init(**logger_params)
+        # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
+        wandb.config.dataset_type = self.config.dataset_type
+        wandb.config.model_type = self.config.model_type
+    
+    def _clean_sweep(self, sweep: "Sweep") -> List["Sweep"]:
+        """Get rid of wandb runs that crashed with _step = None."""
+        def _clean_sweep():
+            for r in sweep.runs:
+                if r.summary.get("_step", None) is None:
+                    r.delete()
+                    yield r
+
+        return list(r for r in _clean_sweep())
+    
+    def restore(self) -> None:
+        """TODO: implement restoring from last checkpoint."""
+        pass
     
 
 @torch.no_grad()
 def evaluate(
     model: nn.Module, 
     data_loader: DataLoader,
+    num_eval_batches: int,
     device: torch.device = torch.device("cuda"),
-    subset: bool = False, 
-    num_eval_batches: int = None) -> Union[float, Tuple[float, str]]:
+) -> Tuple[float, float]:
     """"
     Args:
         subset: Whether to evaluate on whole dataloader or just a subset.
         num_eval_batches: If we aren't evaluating on the whole dataloader, then do on this many batches.
     Returns:
-        accuracy: Percentage accuracy.
-        test_preds: List of predictions of model on test set as a binary string. For Boolean functions only.
+        accuracy: Average percentage accuracy on batch.
+        loss: Average loss on batch.
     """
-    if subset and num_eval_batches is None:
-        raise ValueError("For subset evaluation, num_eval_batches should be specified.")
-
     model = model.to(device).eval()
-    predictions = []
-    actuals = []
+    total_accuracy = 0.
+    total_loss = 0.
 
     for batch_index, (inputs, labels) in enumerate(data_loader):
-        if subset and batch_index >= num_eval_batches:  # Limit the number of batches processed by the function
-            break
+        if batch_index >= num_eval_batches: break
         inputs, labels = inputs.to(device), labels.to(device)
-        output = model(inputs)
-        output = torch.sigmoid(output).squeeze()
-        predicted = (output > 0.5).cpu()  # Threshold sigmoid outputs for binary predictions
-        predictions.append(predicted)
-        actuals.append(labels.cpu())
+        outputs = model(inputs)
+        
+        total_loss += F.cross_entropy(outputs, labels)
+        
+        probs = torch.softmax(outputs, dim=-1)
+        predictions = torch.argmax(probs, dim=-1)
+        
+        correct_predictions = (predictions == labels).all(dim=-1)
+        total_accuracy += correct_predictions.float().mean().item() * 100
 
     model.train()
-
-    # Convert lists of tensors to single tensor
-    predictions, actuals = torch.cat(predictions), torch.cat(actuals)
-    accuracy = (predictions == actuals).float().mean().item() * 100
-
-    if subset: # For train accuracy
-        return accuracy
-    else: # For evaluating on test set only
-        test_preds = ''.join([str(int(p)) for p in predictions.tolist()])
-        return accuracy, test_preds
-    
-
-def create_or_load_dataset(dataset_type: str, dataset_config: DatasetConfig) -> Dataset:
-    """Create or load an existing dataset based on a specified filepath and dataset type."""
-    filepath = f'{dataset_config.data_folder}/{dataset_config.filename}.pt'
-    if os.path.exists(filepath):
-        dataset = torch.load(filepath)
-    else:
-        dataset_type = globals()[dataset_type]
-        dataset = dataset_type(dataset_config)
-        torch.save(dataset, filepath)
-    return dataset
+    return total_accuracy / num_eval_batches, total_loss / num_eval_batches
 
 
+def update_with_wandb_config(config: OmegaConf, sweep_params: list[str]) -> OmegaConf:
+    """Check if each parameter exists in wandb.config and update it if it does."""
+    for param in sweep_params:
+        if param in wandb.config:
+            print("Updating param with value from wandb config: ", param)
+            OmegaConf.update(config, param, wandb.config[param], merge=True)
+    return config
+
+
+#TODO: need?
 def create_dataloaders(
     dataset: Dataset,
-    dl_config: DataLoaderConfig) -> Tuple[DataLoader, DataLoader]:
+    dl_config: DataLoaderConfig,
+) -> Tuple[DataLoader, DataLoader]:
     """For a given dataset and dataloader configuration, return test and train dataloaders with a deterministic test-train split on full dataset (set by seed - see configs)."""
     assert 0 <= dl_config.train_fraction <= 1, "train_fraction must be between 0 and 1."
     torch.manual_seed(dl_config.seed)
@@ -178,32 +219,20 @@ def create_dataloaders(
     return train_dataloader, test_dataloader
 
 
+# TODO: need?
 def save_to_csv(
     dataset: Dataset, 
     filename: str,
     input_col_name: str ='input',
-    label_col_name: str ='label') -> None:
+    label_col_name: str ='label'
+) -> None:
+    """Save a dataset to a csv file."""
     data = [(str(x.numpy()), int(y.numpy())) for x, y in dataset]
     df = pd.DataFrame(data, columns=[input_col_name, label_col_name])
     df.to_csv(filename, index=False)
 
 
-def optimizer_constructor(config: MainConfig, model: nn.Module) -> optim.Optimizer:
-    match config.optimizer_config.optimizer_type:
-        case OptimizerType.SGD:
-            optim_constructor = torch.optim.SGD
-        case OptimizerType.ADAM:
-            optim_constructor = torch.optim.Adam
-        case _:
-            raise ValueError(f"Unknown optimizer type: {config.optimizer_config.optimizer_type}")
-    optim = optim_constructor(
-        params=model.parameters(),
-        lr=config.optimizer_config.default_lr,
-        **config.optimizer_config.optimizer_kwargs,
-    )
-    return optim
-
-
+# TODO: need?
 def get_input_shape(dataset: Dataset) -> tuple[int, ...]:
     """
     Get the input shape of a dataset. This is useful for constructing the model.
@@ -211,3 +240,14 @@ def get_input_shape(dataset: Dataset) -> tuple[int, ...]:
     Assumes a supervised dataset (x, y)
     """
     return dataset[0][0].shape
+
+
+def get_previous_commit_hash():
+    """Used to get Github commit hash."""
+    try:
+        # Execute the git command to get the previous commit hash
+        commit_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD~1'], stderr=subprocess.STDOUT).decode('utf-8').strip()
+        return commit_hash
+    except subprocess.CalledProcessError as e:
+        print(f"Error: {e.output.decode('utf-8')}")
+        return None

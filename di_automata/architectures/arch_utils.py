@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from typing import string
 
 def get_param_name(module: nn.Module, param: torch.Tensor) -> str:
     """

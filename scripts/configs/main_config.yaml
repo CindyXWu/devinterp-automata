@@ -1,47 +1,42 @@
 dataset_type: PARITY
 model_type: NANO_GPT
+parameterisation: MUP
 
 optimizer_config:
-  optimizer_type: SGD
-  default_lr: 0.01
+  optimizer_type: ADAMW
+  default_lr: 3e-4
   optimizer_kwargs: {}
   weight_decay: 0.0
   clip_grad: inf
   cosine_lr_schedule: false
 
-dataset_config:
-  data_folder: data
-  input_length: 20
-  size: 10000
-  seed: 42
-  length: 20
-  random_length: False
-
 parity_config: # Empty by default, just here for clarity
-
+  prob1: 0.5
+  vocab_size: 2
+  dataset_type: parity
+  size: 600000
+  seed: 42
+  length: 100
+  random_length: false
+  
 dataloader_config:
-  type: Parity
   train_bs: 64
   test_bs: 32
   num_workers: 4
-  train_fraction: 0.95
+  train_fraction: 1
   shuffle_train: true
   seed: 42
-
-num_training_iter: 10000
-loss_threshold: 0.01
-eval_frequency: 20
-num_eval_batches: 20
 
 nano_gpt_config:
   block_size: 10
   vocab_size: 2 # Will be updated automatically based on dataset
   output_vocab_size: 2 # Will be updated automatically based on dataset
-  n_layers: 3
-  n_heads: 4
-  embed_dim: 256
-  dropout: 0.0
+  n_layers: 8
+  n_heads: 8
+  embed_dim: 512
+  dropout: 0.1
   is_causal: true
+  bias: true
 
 rlct_config:
   sampling_method: SGLD
@@ -74,8 +69,23 @@ rlct_config:
   save_results: true
 
 wandb_config:
-  log_to_wandb: true # Set to false if testing only
+  log_to_wandb: true
   save_model_as_artifact: true
-  wandb_project_name: "ib-fcnn"
-  model_save_path: "trained_models"
-  sweep: true
+  wandb_project_name: "devinterp-automata"
+  sweep: false
+
+initialisation:
+  default_init_scale: 1.0
+  global_init_scale: 1.0
+  init_scales_per_param: none
+  init_distribution: NORMAL
+
+num_training_iter: 10000
+loss_threshold: 0.01
+num_eval_batches: 20
+model_save_path: "trained_models"
+save_local: true # To test for now
+eval_frequency: none # If not specified then use length of dataloader
+run_name: ""
+is_wandb_enabled: false
+num_epochs: 0

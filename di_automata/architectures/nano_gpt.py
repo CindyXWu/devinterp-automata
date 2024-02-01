@@ -5,20 +5,17 @@ https://github.com/karpathy/nanoGPT/blob/master/model.py
 
 I have in turn borrowed this from Bruno's implementation of a transformer-classifier from the mechanistic-distillation codebase.
 """
-
 from collections import OrderedDict
-from enum import Enum
 import math
 import inspect
-from dataclasses import dataclass
-from typing import Optional
+from einops import rearrange
 
 import torch
 import torch.nn as nn
-from einops import rearrange, repeat, reduce
 from torch import LongTensor, Tensor
 from torch.nn import functional as F
-from architectures.common import Identity, Lambda, SplitAggregate, Residual
+
+from di_automata.architectures.common import Identity, Lambda, SplitAggregate, Residual
 from di_automata.config_setup import NanoGPTConfig
 
 

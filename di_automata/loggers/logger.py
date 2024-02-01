@@ -22,15 +22,11 @@ class LoggerBase(abc.ABC):
         self._step += 1
 
     @abc.abstractmethod
-    def log_scalar(self, name: str, value: float, step: Optional[int] = None):
+    def log_scalar(self, name: str, value: float, step: Optional[int] = None, commit: Optional[bool] = None, sync: Optional[bool] = None):
         pass
 
     @abc.abstractmethod
-    def log_scalars(self, name: str, value: Sequence[float], step: Optional[int] = None):
-        pass
-    
-    @abc.abstractmethod
-    def log_dictionary(self, dictionary: Dict[str, float], step: Optional[int] = None):
+    def log_scalars(self, name: str, value: Sequence[float], step: Optional[int] = None, commit: Optional[bool] = None, sync: Optional[bool] = None):
         pass
 
 
@@ -42,7 +38,4 @@ class NullLogger(LoggerBase):
         pass
 
     def log_scalars(self, name: str, value: Sequence[float], step: Optional[int] = None):
-        pass
-    
-    def log_dictionary(self, dictionary: Dict[str, float], step: Optional[int] = None):
         pass

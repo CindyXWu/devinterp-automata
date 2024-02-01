@@ -1,15 +1,9 @@
-from pydantic import BaseModel, Field, validator, model_validator
+from pydantic import BaseModel, Field, validator, root_validator
 from enum import Enum
 from abc import abstractmethod
 from torch.utils.data import DataLoader
 from typing import Any, Optional, List, Union
 import math
-
-
-class WeightInit(str, Enum):
-    NORMAL = "NORMAL"
-    KAIMING = "KAIMING"
-    UNIFORM = "UNIFORM"
     
 
 class ModelType(str, Enum):
@@ -34,6 +28,7 @@ class DatasetType(str, Enum):
 class OptimizerType(str, Enum):
     SGD = "SGD"
     ADAM = "ADAM"
+    ADAMW = "ADAMW"
     
 
 class DistributionType(str, Enum):
@@ -84,40 +79,40 @@ class InitialisationConfig(BaseModel):
     
     global_init_scale: float = Field(default=1.0, description="Multiplier to apply tor all init scales (including default)")
     
-    init_scales_per_param: dict[str, float] = Field(default_factory=dict, description="If specified, overrides the default init_scale with a per-parameter init_scale")
+    init_scales_per_param: Optional[dict[str, float]] = Field(default_factory=dict, description="If specified, overrides the default init_scale with a per-parameter init_scale")
     
     init_distribution: DistributionType = Field(default=DistributionType.NORMAL, description="The initialisation distribution")
 
 
 class NanoGPTConfig(BaseModel):
-    block_size: int = Field(default=1024, description="Max. sequence length")
-    vocab_size: int = Field(default=50304, description="GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency")
+    block_size: int = Field(default=1024, description="Max. sequence length.")
+    vocab_size: int = Field(default=50304, description="GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency.")
     output_vocab_size: int = Field(default=None, description="Used for non-autoregressive case.")
-    n_layers: int = 12
-    n_heads: int = 12
-    embed_dim: int = 768
-    dropout: float = 0.0
+    n_layers: int = Field(default=12, description="This will vary through experiments.")
+    n_heads: int = 8
+    embed_dim: int = 512
+    dropout: float = Field(default=0.1, description="Default value was found to stabilise training for certain datasets. See Appendix B of automata paper.")
     is_causal: bool = False
-    bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    # Init. settings (scales):
-    # TODO
+    bias: bool = Field(default=True, description="True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster.")
         
     
 class OptimizerConfig(BaseModel):
-    optimizer_type: OptimizerType = Field(default=OptimizerType.SGD)
+    optimizer_type: OptimizerType = Field(default=OptimizerType.ADAM)
     default_lr: float = Field(default=1e-3)
+    final_lr: float = Field(default=None)
     optimizer_kwargs: dict[str, Any] = Field(default_factory=dict)
     weight_decay: float = Field(default=0.0)
     clip_grad: float = Field(default=float("inf"))
     cosine_lr_schedule: bool = Field(default=False)
-
-    @model_validator('default_lr')
-    def check_lr(cls, v):
-        if v <= 0:
-            raise ValueError('Learning rate must be positive')
-        return v
-
-
+    dropout: float = Field(default=0.0)
+    # To do: consider usign EMA as detailed in paper
+    # And do sweep over dropout
+    
+    @property
+    def final_lr(self):
+        return self.default_lr * 0.1 if not self.final_lr else self.final_lr
+    
+    
 class DataLoaderConfig(BaseModel):
     """
     train_bs: Batch size for training.
@@ -132,35 +127,39 @@ class DataLoaderConfig(BaseModel):
     num_workers: int = Field(default=1)
     train_fraction: float = Field(default=0.95)
     shuffle_train: bool = Field(default=True)
-    
+
 
 class DatasetConfig(BaseModel):
     """All automaton dataset classes below inherit from this."""
-    dataset_filename: str = Field(default="filename.csv")
-    data_folder: str = Field(default="data")
-    dataset_type: str = Field(default=DatasetType)
-    size: int = Field(1000)
+    dataset_type: DatasetType = Field(default=DatasetType.PARITY)
+    size: int = Field(600000)
     seed: int = Field(default=42)
-    
-    length: int = Field(default=20)
-    random_length: bool = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
-            
-    @validator('dataset_type')
-    def check_dataset_type(cls, v):
-        if not cls._validate_dataset_type(v):
+    length: int = Field(default=100, description="Paper uses sequence length 100.") 
+    random_length: Optional[bool] = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
+    data_folder: Optional[str] = Field(default="data")
+
+    @validator('dataset_type', pre=False, always=True)
+    def check_dataset_type(cls, value):
+        if not cls._validate_dataset_type(value):
             raise ValueError(f"Invalid dataset_type for {cls.__name__}")
-        return v
+        return value
     
     @classmethod
-    def _validate_dataset_type(cls, dataset_type: str) -> bool:
-        mapped_class = config_class_map.get(dataset_type)
+    def _validate_dataset_type(cls,value) -> bool:
+        dataset_type_str = value.value
+        mapped_class = config_class_map[dataset_type_str]
         return mapped_class is cls
+    
+    @property
+    def dataset_filename(self):
+        return f"{self.dataset_type}_{self.size}_{self.length}_{self.random_length}"
     
     @property
     @abstractmethod
     def output_vocab_size(self):
         """Abstract method to determine output vocabulary size of transformer."""
         pass
+    
     
     
 class BinaryInputAutomatonConfig(DatasetConfig):
@@ -173,7 +172,8 @@ class ParityAutomatonConfig(BinaryInputAutomatonConfig):
     @property
     def output_vocab_size(self):
         return 2
-    
+
+
 class GridworldAutomatonConfig(BinaryInputAutomatonConfig):
     class Label(str, Enum):
         STATE = "state"
@@ -265,8 +265,9 @@ class SymmetricAutomatonConfig(PermutationAutomatonConfig):
     """
     n_actions: Optional[int] = Field(default=3, description="Number of permutations to include in the generator set, with 3 default actions: id, shift-by-1, swap-first-two)")
 
+
 class AlternatingAutomatonConfig(PermutationAutomatonConfig):
-    """Dummy class to show inheritance structure."""
+    """Dummy class to show inheritance structure from PermutationAutomatonConfig."""
     pass
 
 
@@ -278,7 +279,7 @@ class CyclicAutomatonConfig(DatasetConfig):
     def output_vocab_size(self):
         return self.n
 
-## TODO: classes for Dihedral, Quaternion, PermutationReset
+# ## TODO: classes for Dihedral, Quaternion, PermutationReset
 
 class RLCTSamplerType(str, Enum):
     SGLD = "SGLD"
@@ -321,39 +322,37 @@ class RLCTConfig(BaseModel):
     
 
 class WandBConfig(BaseModel):
-    log_to_wandb: bool = Field(default=True)
+    log_to_wandb: bool = Field(default=True, description="Set to false if testing only.")
     save_model_as_artifact: bool = Field(default=True)
-    model_save_path: str = Field(default="trained_models")
-    wandb_project_name: str = Field(default="devinterp")
-    sweep: bool = Field(default=False)
-    
-    def model_factory(self):
-        return WandBConfig(
-            log_to_wandb=True,
-            save_model_as_artifact=True,
-            wandb_project_name="devinterp-automata",
-            sweep=False
-        )
+    wandb_project_name: str = Field(default="devinterp-automata")
+    sweep: bool = Field(default=False, description="Whether to run a sweep.")
+    sweep_num: Optional[int] = Field(default=None, description="Number of repeats per sweep.")
+    wandb_run_name_suffix: Optional[str] = Field(default=None, description="Additional run name e.g. for temporary or test runs.")
+                
+    @validator('sweep_num', pre=True, always=True)
+    def check_sweep_num(cls, value, values):
+        if values.get('sweep') and value is None: raise ValueError("Must specify sweep_num if sweep is True.")
+        return value
 
 
 class MainConfig(BaseModel):
-    ## Critical
     dataset_type: DatasetType
     model_type: ModelType
     
-    ## Data
-    dataset_config: DatasetConfig = Field(default_factory=DatasetConfig)
-    adder_config: Optional[AdderAutomatonConfig] = Field(default_factory=AdderAutomatonConfig)
-    abab_config: Optional[ABABAutomatonConfig] = Field(default_factory=ABABAutomatonConfig)
-    alternating_config: Optional[AlternatingAutomatonConfig] = Field(default_factory=AlternatingAutomatonConfig)
-    cyclic_config: Optional[CyclicAutomatonConfig] = Field(default_factory=CyclicAutomatonConfig)
-    flipflop_config: Optional[FlipFlopAutomatonConfig] = Field(default_factory=FlipFlopAutomatonConfig)
-    gridworld_config: Optional[GridworldAutomatonConfig] = Field(default_factory=GridworldAutomatonConfig)
+    ## Data - names must match dictionary present in the AutomatonDataset class as {config.dataset_type.lower()}_config
     parity_config: Optional[ParityAutomatonConfig] = Field(default_factory=ParityAutomatonConfig)
-    symmetric_config: Optional[SymmetricAutomatonConfig] = Field(default_factory=SymmetricAutomatonConfig)
+    # adder_config: Optional[AdderAutomatonConfig] = Field(default_factory=AdderAutomatonConfig)
+    # abab_config: Optional[ABABAutomatonConfig] = Field(default_factory=ABABAutomatonConfig)
+    # alternating_config: Optional[AlternatingAutomatonConfig] = Field(default_factory=AlternatingAutomatonConfig)
+    # cyclic_config: Optional[CyclicAutomatonConfig] = Field(default_factory=CyclicAutomatonConfig)
+    # flipflop_config: Optional[FlipFlopAutomatonConfig] = Field(default_factory=FlipFlopAutomatonConfig)
+    # gridworld_config: Optional[GridworldAutomatonConfig] = Field(default_factory=GridworldAutomatonConfig)
+    # symmetric_config: Optional[SymmetricAutomatonConfig] = Field(default_factory=SymmetricAutomatonConfig)
     # TODO: permutation reset, dihedral, quaternion
     
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
+    
+    initialisation: InitialisationConfig = Field(default_factory=InitialisationConfig)
     
     optimizer_config: OptimizerConfig = Field(default_factory=OptimizerConfig)
     
@@ -362,38 +361,38 @@ class MainConfig(BaseModel):
     
     rlct_config: Optional[RLCTConfig] = None
     
-    wandb_config: WandBConfig = Field(default_factory=WandBConfig.model_factory())
+    wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     
     ## Training bits and bobs
+    parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
-    eval_frequency: Optional[int] = Field(default=None)
     num_eval_batches: Optional[int] = Field(default=20)
     loss_threshold: float = Field(default=1e-5)
-        
-    @property
-    def num_epochs(self):
-        """
-        Getter for number of epochs.
-        
+    # Set by validator
+    run_name: Optional[str] = Field(default=None)
+    is_wandb_enabled: Optional[bool] = Field(default=None)
+    num_epochs: Optional[int] = Field(default=None)
+    # Set at runtime *shakes fist at Hydra library
+    eval_frequency: Optional[int] = Field(default=None)
+    
+    model_save_path: str = Field(default="trained_models", description="Root directory to locally save trained models.")
+    save_local: bool = Field(default=False, description="Whether to save as torch object locally.")
+    
+    @root_validator(pre=True)
+    def _set_fields(cls, v: dict):
+        """Note evaluations occur during training.
+        Eval_frequency must be specified at run-time if using an iterable train_loader.
         Epochs defined a bit differently: an epoch is the period of training in-between evaluations. This is to make it compatible with infinite trainloaders. If eval_frequency is None, then the two coincide.
+        
+        Args:
+            v (dict): Stores attributes of MainConfig object.
         """
-        if not self.eval_frequency: raise ValueError("eval_frequency must be set to get num_epochs")
-        return math.ceil(self.num_training_iter / self.eval_frequency)
-    
-    @property
-    def eval_frequency(self, train_loader: DataLoader):
-        """Note evaluations occur during training."""
-        return self.eval_frequency if self.eval_frequency is not None else len(train_loader)
-    
-    @property
-    def run_name(self):
-        pass # TODO: implement
+        v["run_name"] = f"{v['dataset_type']}_{v['model_type']}"
+        v["is_wandb_enabled"] = v["wandb_config"] and v["wandb_config"]["log_to_wandb"]
+        v["num_epochs"] = math.ceil(v["num_training_iter"] / v["eval_frequency"])
+        return v
     
     # TODO: check if you want logger to be in separate config class (start off with no for now)
-    @property
-    def is_wandb_enabled(self):
-        """Whether wandb is enabled."""
-        return self.wandb_config and self.wandb_config.log_to_wandb
     
     # Custom validator to adjust NanoGPTConfig based on DatasetConfig
     @validator('nano_gpt_config', pre=True, always=True)
@@ -405,17 +404,17 @@ class MainConfig(BaseModel):
             nano_gpt_config.block_size = dataset_config.length
             nano_gpt_config.output_vocab_size = specific_dataset_config.output_vocab_size
         return nano_gpt_config
-    
+
 
 config_class_map = {
     "abab": ABABAutomatonConfig,
     "add": CyclicAutomatonConfig,
     "cyclic": CyclicAutomatonConfig,
-    # TODO: dihedral
     "flipflop": FlipFlopAutomatonConfig,
     "gridworld": GridworldAutomatonConfig,
     "parity": ParityAutomatonConfig,
-    # TODO "quaternion": QuaternionAutomatonConfig,
-    # TODO: "permutation_reset": PermutationResetAutomatonConfig,
+    # "quaternion": QuaternionAutomatonConfig,
+    # "permutation_reset": PermutationResetAutomatonConfig,
+    # "dihedral": DihedralAutomatonConfig,
     "symmetric": SymmetricAutomatonConfig,
 }

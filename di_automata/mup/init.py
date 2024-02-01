@@ -8,9 +8,9 @@ import math
 from typing import Container, Sequence, Union
 import torch.nn as nn
 import logging
-from mechanistic_distillation.config_schemas import DistributionType
 
-from mechanistic_distillation.mup.inf_types import InfParam, InfType
+from di_automata.config_setup import DistributionType
+from di_automata.mup.inf_types import InfParam, InfType
 
 
 def mup_initialise(
