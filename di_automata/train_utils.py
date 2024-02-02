@@ -1,4 +1,5 @@
 """"Make Run class which contains all relevant logic for instantiating and training."""
+from typing import Tuple, List, Dict, TypedDict, TypeVar
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -7,19 +8,18 @@ import wandb
 import logging
 import os
 import subprocess
+from pathlib import Path
 from omegaconf import OmegaConf
 
 import torch
-from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import DataLoader, random_split
-from typing import Tuple, List, Dict, TypedDict, TypeVar
+from torch.utils.data import DataLoader, Dataset, random_split
 
 from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.devinterp.slt import estimate_learning_coeff
+from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import *
 from di_automata.constructors import (
     construct_model, 
@@ -40,11 +40,14 @@ class StateDict(TypedDict):
     
     
 def state_dict(model, optimizer, scheduler) -> StateDict:
-    """Used for model saving."""
+    """Used for model saving.
+    
+    Note if cosine LR scheduler not used, scheduler is None.
+    """
     return {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
-        "scheduler": {k: v for k,v in scheduler.state_dict().items() if not callable(v)}
+        "scheduler": {k: v for k,v in scheduler.state_dict().items() if not callable(v)} if scheduler is not None else None,
     }
     
 
@@ -54,6 +57,7 @@ class Run:
         config: MainConfig,
     ):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
         self.config = config
         
         self._set_logger()
@@ -66,6 +70,9 @@ class Run:
         initialise_model(config, self.model, param_inf_properties)
         
         self.optimizer, self.scheduler = optimizer_constructor(config, self.model, param_inf_properties)
+        
+        self.model_save_dir = Path(self.config.model_save_path)
+        self.model_save_dir.mkdir(parents=True, exist_ok=True)
     
     def train(self) -> None:
         criterion = nn.CrossEntropyLoss()
@@ -75,10 +82,11 @@ class Run:
         
         for epoch in range(self.config.num_epochs):
             train_loss = []
+            print(f"Training epoch {epoch}")
+            num_iter = self.config.eval_frequency if epoch + 1 <= self.config.num_training_iter / self.config.eval_frequency  else self.config.num_training_iter % self.config.eval_frequency
             
-            for inputs, labels in self.train_loader:
-                print(f"Training epoch {epoch}")
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+            for _, data in take_n(self.train_loader, num_iter): # Compatible with HF dataset format where data is a dictionary
+                inputs, labels = data["input_ids"].to(self.device), data["label_ids"].to(self.device)
                 logits = self.model(inputs)
 
                 self.optimizer.zero_grad()
@@ -103,7 +111,7 @@ class Run:
     
     def _evaluation_step(self, epoch) -> float:
         """TODO: consider test accuracy and loss."""
-        train_acc, train_loss = evaluate(self.model, self.train_loader, subset=True, num_eval_batches=self.config.num_eval_batches)
+        train_acc, train_loss = evaluate(self.model, self.train_loader, num_eval_batches=self.config.num_eval_batches)
         self.train_acc_list.append(train_acc)
         self.train_loss_list.append(train_loss)
         # test_acc, test_loss = evaluate(self.model, self.test_loader, subset=False)
@@ -112,7 +120,7 @@ class Run:
         self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.config.optimizer_config.default_lr}, Loss Threshold: {self.config.loss_threshold}')
         
         # wandb.log({"Train Acc": train_acc, "Test Acc": test_acc, "Train Loss": np.mean(train_loss), "Test Loss": np.mean(test_loss), "LR": self.config.optimizer_config.default_lr}, step=epoch)
-        wandb.log({"Train Acc": train_acc, "Train Loss": np.mean(train_loss), "LR": self.config.optimizer_config.default_lr}, step=epoch)
+        wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.config.optimizer_config.default_lr}, step=epoch)
         
         return train_loss
 
@@ -123,7 +131,7 @@ class Run:
             model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
             wandb.log_artifact(model_artifact)
         if self.config.save_local:
-            file_path = f"{self.config.model_save_path}/{self.config.run_name}"
+            file_path =  self.model_save_dir / f"{self.config.run_name}"
             state = state_dict(self.model, self.optimizer, self.scheduler)
             data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
             torch.save(dict(state, **data), file_path)
@@ -177,21 +185,20 @@ def evaluate(
     total_accuracy = 0.
     total_loss = 0.
 
-    for batch_index, (inputs, labels) in enumerate(data_loader):
-        if batch_index >= num_eval_batches: break
-        inputs, labels = inputs.to(device), labels.to(device)
+    for _, data in take_n(data_loader, num_eval_batches):
+        inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
         outputs = model(inputs)
         
         total_loss += F.cross_entropy(outputs, labels)
         
         probs = torch.softmax(outputs, dim=-1)
-        predictions = torch.argmax(probs, dim=-1)
+        predictions = torch.argmax(probs, dim=1) # Second dimension is class dimension in PyTorch for sequence data (see AutoGPT transformer for details)
         
         correct_predictions = (predictions == labels).all(dim=-1)
         total_accuracy += correct_predictions.float().mean().item() * 100
 
     model.train()
-    return total_accuracy / num_eval_batches, total_loss / num_eval_batches
+    return total_accuracy / num_eval_batches, (total_loss / num_eval_batches).item()
 
 
 def update_with_wandb_config(config: OmegaConf, sweep_params: list[str]) -> OmegaConf:
@@ -230,16 +237,6 @@ def save_to_csv(
     data = [(str(x.numpy()), int(y.numpy())) for x, y in dataset]
     df = pd.DataFrame(data, columns=[input_col_name, label_col_name])
     df.to_csv(filename, index=False)
-
-
-# TODO: need?
-def get_input_shape(dataset: Dataset) -> tuple[int, ...]:
-    """
-    Get the input shape of a dataset. This is useful for constructing the model.
-
-    Assumes a supervised dataset (x, y)
-    """
-    return dataset[0][0].shape
 
 
 def get_previous_commit_hash():

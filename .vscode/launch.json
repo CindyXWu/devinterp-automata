@@ -15,6 +15,7 @@
                 "HYDRA_FULL_ERROR": "1"
             },
             "args": [
+                "hydra.job.chdir=True",
             ]
         },
         {

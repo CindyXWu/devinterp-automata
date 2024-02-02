@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field, validator, root_validator
 from enum import Enum
 from abc import abstractmethod
-from torch.utils.data import DataLoader
 from typing import Any, Optional, List, Union
 import math
     
@@ -99,7 +98,8 @@ class NanoGPTConfig(BaseModel):
 class OptimizerConfig(BaseModel):
     optimizer_type: OptimizerType = Field(default=OptimizerType.ADAM)
     default_lr: float = Field(default=1e-3)
-    final_lr: float = Field(default=None)
+    global_lr: float = Field(default=1.0, description=" Multiplier for all learning rates")
+    per_param_lr: Optional[dict[str, float]] = Field(default_factory=dict, description="If specified, overrides the default lr with a per-parameter lr")
     optimizer_kwargs: dict[str, Any] = Field(default_factory=dict)
     weight_decay: float = Field(default=0.0)
     clip_grad: float = Field(default=float("inf"))
@@ -159,7 +159,6 @@ class DatasetConfig(BaseModel):
     def output_vocab_size(self):
         """Abstract method to determine output vocabulary size of transformer."""
         pass
-    
     
     
 class BinaryInputAutomatonConfig(DatasetConfig):
@@ -339,7 +338,7 @@ class MainConfig(BaseModel):
     dataset_type: DatasetType
     model_type: ModelType
     
-    ## Data - names must match dictionary present in the AutomatonDataset class as {config.dataset_type.lower()}_config
+    ## Data - names must match dictionary present in the AutomatonDataset class as {config.dataset_type}_config
     parity_config: Optional[ParityAutomatonConfig] = Field(default_factory=ParityAutomatonConfig)
     # adder_config: Optional[AdderAutomatonConfig] = Field(default_factory=AdderAutomatonConfig)
     # abab_config: Optional[ABABAutomatonConfig] = Field(default_factory=ABABAutomatonConfig)
@@ -372,8 +371,7 @@ class MainConfig(BaseModel):
     run_name: Optional[str] = Field(default=None)
     is_wandb_enabled: Optional[bool] = Field(default=None)
     num_epochs: Optional[int] = Field(default=None)
-    # Set at runtime *shakes fist at Hydra library
-    eval_frequency: Optional[int] = Field(default=None)
+    eval_frequency: Optional[int] = Field(default=None, decription="Defines number of steps per epoch.")
     
     model_save_path: str = Field(default="trained_models", description="Root directory to locally save trained models.")
     save_local: bool = Field(default=False, description="Whether to save as torch object locally.")
@@ -387,23 +385,23 @@ class MainConfig(BaseModel):
         Args:
             v (dict): Stores attributes of MainConfig object.
         """
+        specific_dataset_name = f"{v['dataset_type']}_config"
+        specific_dataset_config = v[specific_dataset_name]
+        specific_dataset_config_instance = ParityAutomatonConfig(**specific_dataset_config)
+        if not v["eval_frequency"]:
+            v["eval_frequency"] = specific_dataset_config["size"]
         v["run_name"] = f"{v['dataset_type']}_{v['model_type']}"
         v["is_wandb_enabled"] = v["wandb_config"] and v["wandb_config"]["log_to_wandb"]
         v["num_epochs"] = math.ceil(v["num_training_iter"] / v["eval_frequency"])
+        # Adjust NanoGPTConfig based on DatasetConfig
+        if v["nano_gpt_config"] and specific_dataset_config:
+            nano_gpt_config = v["nano_gpt_config"]
+            nano_gpt_config["block_size"] = specific_dataset_config["length"]
+            nano_gpt_config["output_vocab_size"] = specific_dataset_config_instance.output_vocab_size
+            v["nano_gpt_config"] = nano_gpt_config
         return v
-    
+
     # TODO: check if you want logger to be in separate config class (start off with no for now)
-    
-    # Custom validator to adjust NanoGPTConfig based on DatasetConfig
-    @validator('nano_gpt_config', pre=True, always=True)
-    def adjust_nano_gpt_config(cls, nano_gpt_config, values):
-        assert dataset_config.output_vocab_size is not None, "Output vocab size must be specified."
-        dataset_config, dataset_type = values.get('dataset_config'), values.get('dataset_type')
-        specific_dataset_config = values.get(f"{dataset_type}_config")
-        if nano_gpt_config and dataset_config:
-            nano_gpt_config.block_size = dataset_config.length
-            nano_gpt_config.output_vocab_size = specific_dataset_config.output_vocab_size
-        return nano_gpt_config
 
 
 config_class_map = {

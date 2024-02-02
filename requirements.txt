@@ -62,4 +62,3 @@ einops
 hydra-core
 omegaconf
 pytest
-hydra-zen

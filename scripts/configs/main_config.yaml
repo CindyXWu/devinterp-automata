@@ -1,20 +1,32 @@
-dataset_type: PARITY
+dataset_type: parity
 model_type: NANO_GPT
 parameterisation: MUP
+
+num_training_iter: 2
+eval_frequency: 2 # If not specified then use length of dataset (dataloader length)
+loss_threshold: 0.01
+num_eval_batches: 20
+model_save_path: "trained_models"
+save_local: true # To test for now
+run_name: null
+is_wandb_enabled: false
+num_epochs: null
 
 optimizer_config:
   optimizer_type: ADAMW
   default_lr: 3e-4
+  global_lr: 1.0
   optimizer_kwargs: {}
+  per_param_lr: {}
   weight_decay: 0.0
-  clip_grad: inf
-  cosine_lr_schedule: false
+  clip_grad: 0.25 # Change to inf if training is being weird
+  cosine_lr_schedule: true
 
 parity_config: # Empty by default, just here for clarity
   prob1: 0.5
   vocab_size: 2
   dataset_type: parity
-  size: 600000
+  size: 60000
   seed: 42
   length: 100
   random_length: false
@@ -77,15 +89,5 @@ wandb_config:
 initialisation:
   default_init_scale: 1.0
   global_init_scale: 1.0
-  init_scales_per_param: none
+  init_scales_per_param: {}
   init_distribution: NORMAL
-
-num_training_iter: 10000
-loss_threshold: 0.01
-num_eval_batches: 20
-model_save_path: "trained_models"
-save_local: true # To test for now
-eval_frequency: none # If not specified then use length of dataloader
-run_name: ""
-is_wandb_enabled: false
-num_epochs: 0

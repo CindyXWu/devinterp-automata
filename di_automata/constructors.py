@@ -1,10 +1,7 @@
-from typing import Union, Optional
-import datasets
-from datasets import load_dataset_builder
+from typing import Union, Optional, Generator
 import numpy as np
 import logging
 import os
-import datasets
 
 import torch
 import torch.nn as nn
@@ -12,8 +9,9 @@ from torch.utils.data import DataLoader, Dataset
 
 from di_automata.config_setup import MainConfig, ModelType, ParameterisationType, DatasetConfig, OptimizerType
 from di_automata.architectures.nano_gpt import Transformer
-from di_automata.mup.inf_types import InfParam, get_inf_types, get_params_without_init
 from di_automata.tasks.automata import AutomatonDataset
+from di_automata.tasks.data_utils import TorchDatasetFromIterable
+from di_automata.mup.inf_types import InfParam, get_inf_types, get_params_without_init
 from di_automata.mup.init import (
     mup_initialise,
     scale_init_inplace,
@@ -41,15 +39,14 @@ def create_or_load_dataset(dataset_type: str, dataset_config: DatasetConfig) -> 
 
 
 def create_dataloader_hf(config: MainConfig) -> DataLoader:
-    """Load dataset from automata.py using HuggingFace.
+    """Load dataset from automata.py.
     
     Note the Automata dataset class automatically handles which instance of which dataclass it is based on the config parameters.
     """
-    # For this logic to work, names of config's attributes corresponding to individual dataset types must match dictionary present in the AutomatonDataset class
-    dataset_config = getattr(config, f'{config.dataset_type.lower()}_config')
-    automaton_dataset = AutomatonDataset(dataset_config)
-    data = automaton_dataset._generate_examples()
-    train_loader = DataLoader(data, batch_size=config.dataloader_config.train_bs) # Infinite
+    automaton_dataset = AutomatonDataset(config)
+    # Wrap generator with custom IterableDataset
+    iterable_dataset = TorchDatasetFromIterable(automaton_dataset)
+    train_loader = DataLoader(iterable_dataset, batch_size=config.dataloader_config.train_bs)
     return train_loader
 
 

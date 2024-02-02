@@ -210,8 +210,9 @@ class Transformer(nn.Module):
         x = self.dropout(tok_emb + pos_emb)
         x = self.h(x)
 
-        # unembedding: transform back to predicted next tokens
-        y = self.unembedding(x)   # B T C @ . C V -> B T V
+        # Unembedding: transform back to predicted next tokens
+        # Permute output as PyTorch nn.CrossEntropyLoss() expects [batch_size, nb_classes, *]
+        y = rearrange(self.unembedding(x), 'B T V -> B V T')   # B T C @ . C V -> B T V
         
         return y
     

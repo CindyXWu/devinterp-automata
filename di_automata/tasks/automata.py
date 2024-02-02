@@ -76,10 +76,11 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
             'permutation_reset': PermutationResetAutomaton
             # TODO: add Dyck
         }
-
-        self.data_config = config
+        self.config = config
+        # Names of config's individual dataset configs must match dictionary keys in AutomatonDataset class
+        self.data_config = getattr(config, f'{config.dataset_type.value}_config')
         # Instantiated dataset class object
-        self.automaton = self.dataset_map[config.dataset_type](config)
+        self.automaton = self.dataset_map[config.dataset_type](self.data_config)
 
     def _info(self):
         features = datasets.Features(

@@ -1,36 +1,35 @@
-import os
 import hydra
-import wandb
 from hydra.core.config_store import ConfigStore
-from hydra_zen import builds, instantiate
+from omegaconf import OmegaConf
 
 from di_automata.create_sweep import load_config
 from di_automata.config_setup import MainConfig
 from di_automata.train_utils import Run, update_with_wandb_config
 from di_automata.config_setup import MainConfig
 
-
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
 # CHANGE THESE  
 config_filename = "main_config"
 sweep_filename = ""
 
-# Use hydra-zen library to make Pydantic play nice with Hydra
-HydraConf = builds(MainConfig, populate_full_signature=True)
-cs = ConfigStore.instance()
-cs.store(name="config_base", node=HydraConf)
+# # Drop use of ConfigStore to make Pydantic play nice with Hydra
+# cs = ConfigStore.instance()
+# cs.store(name="config_base", node=HydraConf)
     
-@hydra.main(config_path="configs/", config_name=config_filename, version_base=None)
-def main(config_temp: HydraConf) -> None:
+@hydra.main(config_path="configs/", config_name=config_filename)
+def main(config: MainConfig) -> None:
     """config is typed as MainConfig for duck-typing, but during runtime it's actually an OmegaConf object.
     
     MainConfig class (or any class used as type hint for config parameter) doesn't restrict what keys can be in config. It provides additional information to editor and Hydra's instantiate function. Contents of this object are determined entirely by config files and command line arguments.
     """
-    config: MainConfig = instantiate(config_temp)
     # if config.wandb_config.sweep:
     #     config = update_with_wandb_config(config, sweep_params)
-    run = Run(config)
+    
+    OmegaConf.resolve(config)
+    # Convert OmegaConf object to MainConfig pydantic model for dynamic type validation
+    pydantic_config = MainConfig(**config)
+    # Convert back to OmegaConf object for compatibility with existing code
+    omegaconf_config = OmegaConf.create(pydantic_config.dict())
+    run = Run(omegaconf_config)
     run.train()
 
 
