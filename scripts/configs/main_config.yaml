@@ -2,8 +2,8 @@ dataset_type: parity
 model_type: NANO_GPT
 parameterisation: MUP
 
-num_training_iter: 2
-eval_frequency: 2 # If not specified then use length of dataset (dataloader length)
+num_training_iter: 10000
+eval_frequency: 200 # If not specified then use length of dataset (dataloader length)
 loss_threshold: 0.01
 num_eval_batches: 20
 model_save_path: "trained_models"
@@ -18,7 +18,7 @@ optimizer_config:
   global_lr: 1.0
   optimizer_kwargs: {}
   per_param_lr: {}
-  weight_decay: 0.0
+  weight_decay: 0.9
   clip_grad: 0.25 # Change to inf if training is being weird
   cosine_lr_schedule: true
 
@@ -27,17 +27,16 @@ parity_config: # Empty by default, just here for clarity
   vocab_size: 2
   dataset_type: parity
   size: 60000
-  seed: 42
+  seed: null # Be careful if this is set to a non null value, it will lead to the same data been seen each epoch (dig into guts of np_rng in Automaton datasets)
   length: 100
   random_length: false
   
 dataloader_config:
   train_bs: 64
-  test_bs: 32
+  test_bs: 64
   num_workers: 4
   train_fraction: 1
   shuffle_train: true
-  seed: 42
 
 nano_gpt_config:
   block_size: 10

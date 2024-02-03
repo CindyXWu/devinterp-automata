@@ -120,7 +120,6 @@ class DataLoaderConfig(BaseModel):
     num_workers: Number of workers to use.
     train_fraction: Fraction of dataset to be set aside for training.
     shuffle_train: Whether to shuffle the training data.
-    seed: Random seed for reproducibility, ensuring function returns the same split with the same args.
     """
     train_bs: int = Field(default=64)
     test_bs: int = Field(default=32)
@@ -133,10 +132,10 @@ class DatasetConfig(BaseModel):
     """All automaton dataset classes below inherit from this."""
     dataset_type: DatasetType = Field(default=DatasetType.PARITY)
     size: int = Field(600000)
-    seed: int = Field(default=42)
     length: int = Field(default=100, description="Paper uses sequence length 100.") 
     random_length: Optional[bool] = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
     data_folder: Optional[str] = Field(default="data")
+    seed: Optional[int] = Field(default=None)
 
     @validator('dataset_type', pre=False, always=True)
     def check_dataset_type(cls, value):

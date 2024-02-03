@@ -2,3 +2,7 @@
 .DS_Store
 **/outputs/
 **/wandb/
+**/multirun/
+
+# Visual Studio Code
+**/.vscode/

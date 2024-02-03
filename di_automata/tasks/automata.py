@@ -109,6 +109,7 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
         ]
 
     def _generate_examples(self):
+        """Cindy note: I don't use this function in my code."""
         for i in itertools.count(start=0):
             if i == self.data_config.size:
                 break

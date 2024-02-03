@@ -56,6 +56,7 @@ argparse
 pyYAML
 tqdm
 matplotlib
+plotnine
 scipy
 scikit-learn
 einops

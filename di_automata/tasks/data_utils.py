@@ -5,16 +5,22 @@ T = TypeVar("T")
 
 
 class TorchDatasetFromIterable(IterableDataset):
-    def __init__(self, automaton_dataset: AutomatonDataset):
+    def __init__(self, config):
         super(TorchDatasetFromIterable, self).__init__()
-        self.automaton_dataset = automaton_dataset
-    
+        self.config = config
+        
     def __iter__(self):
-        return self.automaton_dataset._generate_examples()
+        automaton_dataset = AutomatonDataset(self.config)
+        while True:
+            x, y = automaton_dataset.automaton.sample()
+            yield {
+                "input_ids": x,
+                "label_ids": y
+            }
     
     def __len__(self):
         """Define steps per epoch to prevent infinite training."""
-        return self.automaton_dataset.config.eval_frequency
+        return self.config.eval_frequency
     
 
 def take_n(i: Iterable[T],  n: Optional[int]) -> Iterator[T]:

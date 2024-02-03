@@ -43,9 +43,8 @@ def create_dataloader_hf(config: MainConfig) -> DataLoader:
     
     Note the Automata dataset class automatically handles which instance of which dataclass it is based on the config parameters.
     """
-    automaton_dataset = AutomatonDataset(config)
-    # Wrap generator with custom IterableDataset
-    iterable_dataset = TorchDatasetFromIterable(automaton_dataset)
+    # Wrap generator with custom IterableDataset which instantiates a new automaton dataset instance per epoch
+    iterable_dataset = TorchDatasetFromIterable(config)
     train_loader = DataLoader(iterable_dataset, batch_size=config.dataloader_config.train_bs)
     return train_loader
 

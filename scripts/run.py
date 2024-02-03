@@ -1,5 +1,4 @@
 import hydra
-from hydra.core.config_store import ConfigStore
 from omegaconf import OmegaConf
 
 from di_automata.create_sweep import load_config

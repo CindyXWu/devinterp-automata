@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, random_split
 
+from di_automata.plotting.plot_utils import visualise_seq_data
 from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.devinterp.slt import estimate_learning_coeff
@@ -79,13 +80,17 @@ class Run:
         self.train_acc_list, self.train_loss_list = [], []
         self.model.train()
         self.progress_bar = tqdm(total=self.config.num_training_iter)
+        self.idx, self.epoch = 0, 0
         
         for epoch in range(self.config.num_epochs):
+            self.epoch += 1
             train_loss = []
             print(f"Training epoch {epoch}")
             num_iter = self.config.eval_frequency if epoch + 1 <= self.config.num_training_iter / self.config.eval_frequency  else self.config.num_training_iter % self.config.eval_frequency
             
-            for _, data in take_n(self.train_loader, num_iter): # Compatible with HF dataset format where data is a dictionary
+            for data in take_n(self.train_loader, num_iter): # Compatible with HF dataset format where data is a dictionary
+                # all_idxs is a list of idxs (not useful)
+                self.idx += 1
                 inputs, labels = data["input_ids"].to(self.device), data["label_ids"].to(self.device)
                 logits = self.model(inputs)
 
@@ -94,6 +99,9 @@ class Run:
                 loss.backward()
                 self.optimizer.step()
                 self.scheduler.step()
+                lr = self.scheduler.get_last_lr()[0]
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = lr
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
@@ -104,14 +112,19 @@ class Run:
                 print(f'Average training loss {avg_train_loss:.3f} is below the threshold {self.config.loss_threshold}. Training stopped.')
                 break
 
-        self._save_model()
+            self._save_model()
         
         if self.config.is_wandb_enabled:
             wandb.finish()
     
     def _evaluation_step(self, epoch) -> float:
         """TODO: consider test accuracy and loss."""
-        train_acc, train_loss = evaluate(self.model, self.train_loader, num_eval_batches=self.config.num_eval_batches)
+        train_acc, train_loss = evaluate(
+            model=self.model, 
+            data_loader=self.train_loader, 
+            num_eval_batches=self.config.num_eval_batches,
+            idx=self.idx
+        )
         self.train_acc_list.append(train_acc)
         self.train_loss_list.append(train_loss)
         # test_acc, test_loss = evaluate(self.model, self.test_loader, subset=False)
@@ -127,7 +140,7 @@ class Run:
     # TODO: edit config run name in config setup file
     def _save_model(self):
         if self.config.wandb_config.save_model_as_artifact:
-            model_artifact = wandb.Artifact("model", type="model", description="The trained model state_dict")
+            model_artifact = wandb.Artifact(f"epoch_{self.epoch}", type="model", description="The trained model state_dict")
             model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
             wandb.log_artifact(model_artifact)
         if self.config.save_local:
@@ -146,7 +159,7 @@ class Run:
             "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
             "mode": "disabled" if not self.config.is_wandb_enabled else "online",
         }
-        wandb.init(**logger_params)
+        wandb.init(**logger_params, entity="wu-cindyx")
         # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
         wandb.config.dataset_type = self.config.dataset_type
         wandb.config.model_type = self.config.model_type
@@ -171,6 +184,7 @@ def evaluate(
     model: nn.Module, 
     data_loader: DataLoader,
     num_eval_batches: int,
+    idx: int,
     device: torch.device = torch.device("cuda"),
 ) -> Tuple[float, float]:
     """"
@@ -184,17 +198,19 @@ def evaluate(
     model = model.to(device).eval()
     total_accuracy = 0.
     total_loss = 0.
+    assert isinstance(idx, int), "idx must be an int"
 
-    for _, data in take_n(data_loader, num_eval_batches):
+    for data in take_n(data_loader, num_eval_batches):
         inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
+        visualise_seq_data(inputs, idx)
         outputs = model(inputs)
         
         total_loss += F.cross_entropy(outputs, labels)
-        
-        probs = torch.softmax(outputs, dim=-1)
-        predictions = torch.argmax(probs, dim=1) # Second dimension is class dimension in PyTorch for sequence data (see AutoGPT transformer for details)
-        
-        correct_predictions = (predictions == labels).all(dim=-1)
+        # Second dimension is class dimension in PyTorch for sequence data (see AutoGPT transformer for details)
+        probs = torch.softmax(outputs, dim=1)
+        predictions = torch.argmax(probs, dim=1)
+
+        correct_predictions = predictions == labels
         total_accuracy += correct_predictions.float().mean().item() * 100
 
     model.train()
@@ -210,20 +226,20 @@ def update_with_wandb_config(config: OmegaConf, sweep_params: list[str]) -> Omeg
     return config
 
 
-#TODO: need?
-def create_dataloaders(
-    dataset: Dataset,
-    dl_config: DataLoaderConfig,
-) -> Tuple[DataLoader, DataLoader]:
-    """For a given dataset and dataloader configuration, return test and train dataloaders with a deterministic test-train split on full dataset (set by seed - see configs)."""
-    assert 0 <= dl_config.train_fraction <= 1, "train_fraction must be between 0 and 1."
-    torch.manual_seed(dl_config.seed)
-    train_size = int(dl_config.train_fraction * len(dataset))
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=dl_config.train_bs, shuffle=dl_config.shuffle_train)
-    test_dataloader = DataLoader(test_dataset, batch_size=dl_config.test_bs)   
-    return train_dataloader, test_dataloader
+# #TODO: need?
+# def create_dataloaders(
+#     dataset: Dataset,
+#     dl_config: DataLoaderConfig,
+# ) -> Tuple[DataLoader, DataLoader]:
+#     """For a given dataset and dataloader configuration, return test and train dataloaders with a deterministic test-train split on full dataset (set by seed - see configs)."""
+#     assert 0 <= dl_config.train_fraction <= 1, "train_fraction must be between 0 and 1."
+#     torch.manual_seed(dl_config.seed)
+#     train_size = int(dl_config.train_fraction * len(dataset))
+#     test_size = len(dataset) - train_size
+#     train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+#     train_dataloader = DataLoader(train_dataset, batch_size=dl_config.train_bs, shuffle=dl_config.shuffle_train)
+#     test_dataloader = DataLoader(test_dataset, batch_size=dl_config.test_bs)   
+#     return train_dataloader, test_dataloader
 
 
 # TODO: need?
