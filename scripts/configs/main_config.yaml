@@ -14,11 +14,11 @@ num_epochs: null
 
 optimizer_config:
   optimizer_type: ADAMW
-  default_lr: 3e-4
+  default_lr: 3e-3
   global_lr: 1.0
   optimizer_kwargs: {}
   per_param_lr: {}
-  weight_decay: 0.9
+  weight_decay: 0
   clip_grad: 0.25 # Change to inf if training is being weird
   cosine_lr_schedule: true
 
@@ -28,7 +28,7 @@ parity_config: # Empty by default, just here for clarity
   dataset_type: parity
   size: 60000
   seed: null # Be careful if this is set to a non null value, it will lead to the same data been seen each epoch (dig into guts of np_rng in Automaton datasets)
-  length: 100
+  length: 25
   random_length: false
   
 dataloader_config:
@@ -45,7 +45,7 @@ nano_gpt_config:
   n_layers: 8
   n_heads: 8
   embed_dim: 512
-  dropout: 0.1
+  dropout: 0
   is_causal: true
   bias: true
 

@@ -134,18 +134,19 @@ class DatasetConfig(BaseModel):
     size: int = Field(600000)
     length: int = Field(default=100, description="Paper uses sequence length 100.") 
     random_length: Optional[bool] = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
-    data_folder: Optional[str] = Field(default="data")
     seed: Optional[int] = Field(default=None)
 
-    @validator('dataset_type', pre=False, always=True)
-    def check_dataset_type(cls, value):
-        if not cls._validate_dataset_type(value):
+    @root_validator(pre=True)
+    def check_dataset_type(cls, values: dict):
+        if not values.get("output_vocab_size"):  # Did not specify the config for this class
+            pass
+        elif not cls._validate_dataset_type(values["dataset_type"]):
             raise ValueError(f"Invalid dataset_type for {cls.__name__}")
-        return value
+        return values
     
     @classmethod
-    def _validate_dataset_type(cls,value) -> bool:
-        dataset_type_str = value.value
+    def _validate_dataset_type(cls, dataset_type_name: DatasetType) -> bool:
+        dataset_type_str = dataset_type_name.value
         mapped_class = config_class_map[dataset_type_str]
         return mapped_class is cls
     
@@ -163,7 +164,7 @@ class DatasetConfig(BaseModel):
 class BinaryInputAutomatonConfig(DatasetConfig):
     """Parent class for Parity, GridWorld, ABAB."""
     prob1: Optional[float] = Field(default=0.5, description="(float in [0,1]): probability of token 1")
-    vocab_size: Optional[int] = Field(default=2, description="Vocab size of dataset (e.g. 2 for binary input)")
+    vocab_size: Optional[int] = Field(default=2, description="Vocab size of dataset input (e.g. 2 for binary input)")
 
 
 class ParityAutomatonConfig(BinaryInputAutomatonConfig): 
@@ -230,7 +231,6 @@ class AdderAutomatonConfig(BinaryInputAutomatonConfig):
 
 class FlipFlopAutomatonConfig(DatasetConfig):
     n: Optional[int] = Field(default=2, description="Number of states")
-    vocab_size: Optional[int] = Field(default=2, description="Vocab size of dataset (e.g. 2 for binary input)")
     
     @property
     def output_vocab_size(self):
@@ -339,13 +339,13 @@ class MainConfig(BaseModel):
     
     ## Data - names must match dictionary present in the AutomatonDataset class as {config.dataset_type}_config
     parity_config: Optional[ParityAutomatonConfig] = Field(default_factory=ParityAutomatonConfig)
-    # adder_config: Optional[AdderAutomatonConfig] = Field(default_factory=AdderAutomatonConfig)
-    # abab_config: Optional[ABABAutomatonConfig] = Field(default_factory=ABABAutomatonConfig)
-    # alternating_config: Optional[AlternatingAutomatonConfig] = Field(default_factory=AlternatingAutomatonConfig)
-    # cyclic_config: Optional[CyclicAutomatonConfig] = Field(default_factory=CyclicAutomatonConfig)
-    # flipflop_config: Optional[FlipFlopAutomatonConfig] = Field(default_factory=FlipFlopAutomatonConfig)
-    # gridworld_config: Optional[GridworldAutomatonConfig] = Field(default_factory=GridworldAutomatonConfig)
-    # symmetric_config: Optional[SymmetricAutomatonConfig] = Field(default_factory=SymmetricAutomatonConfig)
+    adder_config: Optional[AdderAutomatonConfig] = Field(default_factory=AdderAutomatonConfig)
+    abab_config: Optional[ABABAutomatonConfig] = Field(default_factory=ABABAutomatonConfig)
+    alternating_config: Optional[AlternatingAutomatonConfig] = Field(default_factory=AlternatingAutomatonConfig)
+    cyclic_config: Optional[CyclicAutomatonConfig] = Field(default_factory=CyclicAutomatonConfig)
+    flipflop_config: Optional[FlipFlopAutomatonConfig] = Field(default_factory=FlipFlopAutomatonConfig)
+    gridworld_config: Optional[GridworldAutomatonConfig] = Field(default_factory=GridworldAutomatonConfig)
+    symmetric_config: Optional[SymmetricAutomatonConfig] = Field(default_factory=SymmetricAutomatonConfig)
     # TODO: permutation reset, dihedral, quaternion
     
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)

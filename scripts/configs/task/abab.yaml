@@ -1,0 +1,11 @@
+abab_config:
+  dataset_type: abab
+  size: 60000
+  length: 25
+  random_length: false
+  vocab_size: 2
+  seed: null # If set to non-null value, same data seen each epoch (dig into guts of np_rng in Automaton datasets)
+
+  prob1: 0.5
+  prob_abab_pos_sample: 0.25
+  label_type: STATE
