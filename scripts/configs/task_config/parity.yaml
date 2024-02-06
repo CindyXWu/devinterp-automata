@@ -1,0 +1,7 @@
+prob1: 0.5
+vocab_size: 2
+dataset_type: parity
+size: 60000
+seed: null # Be careful if this is set to a non null value, it will lead to the same data been seen each epoch (dig into guts of np_rng in Automaton datasets)
+length: 25
+random_length: false

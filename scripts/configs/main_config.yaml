@@ -1,13 +1,16 @@
-dataset_type: parity
+defaults:
+  - task_config: adder
+
+dataset_type: adder
 model_type: NANO_GPT
 parameterisation: MUP
 
-num_training_iter: 10000
-eval_frequency: 200 # If not specified then use length of dataset (dataloader length)
+num_training_iter: 100000
+eval_frequency: 500 # If not specified then use length of dataset (dataloader length)
 loss_threshold: 0.01
 num_eval_batches: 20
 model_save_path: "trained_models"
-save_local: true # To test for now
+save_local: true # Probably change if running on cloud
 run_name: null
 is_wandb_enabled: false
 num_epochs: null
@@ -19,30 +22,21 @@ optimizer_config:
   optimizer_kwargs: {}
   per_param_lr: {}
   weight_decay: 0
-  clip_grad: 0.25 # Change to inf if training is being weird
-  cosine_lr_schedule: true
-
-parity_config: # Empty by default, just here for clarity
-  prob1: 0.5
-  vocab_size: 2
-  dataset_type: parity
-  size: 60000
-  seed: null # Be careful if this is set to a non null value, it will lead to the same data been seen each epoch (dig into guts of np_rng in Automaton datasets)
-  length: 25
-  random_length: false
+  clip_grad: 1.0 # Change to inf if training is being weird
+  cosine_lr_schedule: false
   
 dataloader_config:
-  train_bs: 64
-  test_bs: 64
+  train_bs: 32
+  test_bs: 32
   num_workers: 4
   train_fraction: 1
   shuffle_train: true
 
 nano_gpt_config:
-  block_size: 10
+  block_size: 100
   vocab_size: 2 # Will be updated automatically based on dataset
   output_vocab_size: 2 # Will be updated automatically based on dataset
-  n_layers: 8
+  n_layers: 3
   n_heads: 8
   embed_dim: 512
   dropout: 0

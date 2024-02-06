@@ -1,0 +1,9 @@
+dataset_type: adder
+size: 60000
+length: 10
+random_length: false
+vocab_size: 2
+seed: null # If set to non-null value, same data seen each epoch (dig into guts of np_rng in Automaton datasets)
+prob1: 0.5
+n_addends: 2
+label_type: state

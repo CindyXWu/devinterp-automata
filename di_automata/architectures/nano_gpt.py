@@ -203,7 +203,12 @@ class Transformer(nn.Module):
 
         # --- forward the GPT model itself
         # token embeddings of shape (batch_size, seq_len, embed_dim)
-        tok_emb = self.token_embedding(idx)  
+        try:
+            tok_emb = self.token_embedding(idx)  
+        except RuntimeError as e:
+            print(f"Runtimerror {e}")
+            tok_emb = self.token_embedding(idx.int().to(device))  
+            
         assert tok_emb.dtype == torch.float32, f"tok_emb dtype is {tok_emb.dtype}, but expected torch.float32"
         # position embeddings of shape (1, seq_len, embed_dim)
         pos_emb = self.pos_embedding(pos)  

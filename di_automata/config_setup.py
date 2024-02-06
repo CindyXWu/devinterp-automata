@@ -12,7 +12,7 @@ class ModelType(str, Enum):
 
 class DatasetType(str, Enum):
     ABAB = 'abab'
-    ADD = 'add'
+    ADDER = 'adder'
     ALTERNATING = 'alternating'
     CYCLIC = 'cyclic'
     DIHEDRAL = 'dihedral'
@@ -84,7 +84,7 @@ class InitialisationConfig(BaseModel):
 
 
 class NanoGPTConfig(BaseModel):
-    block_size: int = Field(default=1024, description="Max. sequence length.")
+    block_size: int = Field(default=1024, description="Should be no less than maximum sequence length.")
     vocab_size: int = Field(default=50304, description="GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency.")
     output_vocab_size: int = Field(default=None, description="Used for non-autoregressive case.")
     n_layers: int = Field(default=12, description="This will vary through experiments.")
@@ -337,16 +337,8 @@ class MainConfig(BaseModel):
     dataset_type: DatasetType
     model_type: ModelType
     
-    ## Data - names must match dictionary present in the AutomatonDataset class as {config.dataset_type}_config
-    parity_config: Optional[ParityAutomatonConfig] = Field(default_factory=ParityAutomatonConfig)
-    adder_config: Optional[AdderAutomatonConfig] = Field(default_factory=AdderAutomatonConfig)
-    abab_config: Optional[ABABAutomatonConfig] = Field(default_factory=ABABAutomatonConfig)
-    alternating_config: Optional[AlternatingAutomatonConfig] = Field(default_factory=AlternatingAutomatonConfig)
-    cyclic_config: Optional[CyclicAutomatonConfig] = Field(default_factory=CyclicAutomatonConfig)
-    flipflop_config: Optional[FlipFlopAutomatonConfig] = Field(default_factory=FlipFlopAutomatonConfig)
-    gridworld_config: Optional[GridworldAutomatonConfig] = Field(default_factory=GridworldAutomatonConfig)
-    symmetric_config: Optional[SymmetricAutomatonConfig] = Field(default_factory=SymmetricAutomatonConfig)
-    # TODO: permutation reset, dihedral, quaternion
+    # Leave class type for task config open and instantiate properly in root validator
+    task_config: dict = Field(default_factory=None)
     
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
     
@@ -384,28 +376,29 @@ class MainConfig(BaseModel):
         Args:
             v (dict): Stores attributes of MainConfig object.
         """
-        specific_dataset_name = f"{v['dataset_type']}_config"
-        specific_dataset_config = v[specific_dataset_name]
-        specific_dataset_config_instance = ParityAutomatonConfig(**specific_dataset_config)
+        # Instantiate correct class for task config
+        config_class = config_class_map[v["dataset_type"]]
+        task_config = v["task_config"]
+        task_config_instance = config_class(**task_config)
+        
         if not v["eval_frequency"]:
-            v["eval_frequency"] = specific_dataset_config["size"]
+            v["eval_frequency"] = task_config["size"]
         v["run_name"] = f"{v['dataset_type']}_{v['model_type']}"
         v["is_wandb_enabled"] = v["wandb_config"] and v["wandb_config"]["log_to_wandb"]
         v["num_epochs"] = math.ceil(v["num_training_iter"] / v["eval_frequency"])
+        
         # Adjust NanoGPTConfig based on DatasetConfig
-        if v["nano_gpt_config"] and specific_dataset_config:
+        if v["nano_gpt_config"] and task_config:
             nano_gpt_config = v["nano_gpt_config"]
-            nano_gpt_config["block_size"] = specific_dataset_config["length"]
-            nano_gpt_config["output_vocab_size"] = specific_dataset_config_instance.output_vocab_size
+            nano_gpt_config["block_size"] = task_config["length"] + 1 # Add one for adder class in case of carry
+            nano_gpt_config["output_vocab_size"] = task_config_instance.output_vocab_size
             v["nano_gpt_config"] = nano_gpt_config
+            
         return v
-
-    # TODO: check if you want logger to be in separate config class (start off with no for now)
-
 
 config_class_map = {
     "abab": ABABAutomatonConfig,
-    "add": CyclicAutomatonConfig,
+    "adder": AdderAutomatonConfig,
     "cyclic": CyclicAutomatonConfig,
     "flipflop": FlipFlopAutomatonConfig,
     "gridworld": GridworldAutomatonConfig,

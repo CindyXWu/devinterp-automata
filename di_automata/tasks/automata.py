@@ -61,6 +61,7 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
         Set default configs.
         
         All config validation is in the config_setup.py file.
+        Not best to have instance of class instantion handled by this parent class, but it is what it is...
         """
         self.dataset_map = {
             'abab': ABABAutomaton,
@@ -77,8 +78,7 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
             # TODO: add Dyck
         }
         self.config = config
-        # Names of config's individual dataset configs must match dictionary keys in AutomatonDataset class
-        self.data_config = getattr(config, f'{config.dataset_type.value}_config')
+        self.data_config = getattr(config, 'task_config')
         # Instantiated dataset class object
         self.automaton = self.dataset_map[config.dataset_type](self.data_config)
 
@@ -284,7 +284,7 @@ class AdderAutomaton(BinaryInputAutomaton):
     def __init__(self, data_config):
         super().__init__(data_config)
         self.name = 'addition'
-        self.n_addends = data_config['n_addends']
+        self.n_addends = data_config["n_addends"]
         self.addend_scales = np.array([2**i for i in range(self.n_addends)]).reshape(-1, 1)
         self.label_type = data_config['label_type']
 

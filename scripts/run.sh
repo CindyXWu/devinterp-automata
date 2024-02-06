@@ -8,8 +8,7 @@ lr="0.001,0.003,0.001,0.03"
 python $SCRIPT_PATH -m optimizer_config.default_lr=$lr hydra.job.chdir=True
 
 ## To put straight into vscode:
-# python scripts/run.py -m optimizer_config.default_lr=0.001,0.003,0.001,0.03 hydra.job.chdir=True
-# python scripts/run.py -m optimizer_config.default_lr=0.001 hydra.job.chdir=True
+# HYDRA_FULL_ERROR=1 python scripts/run.py optimizer_config.default_lr=0.001 hydra.job.chdir=True dataset_type=adder task_config_config=adder
 
 # # ===================== TEACHER ONLY: RLCT ESTIMATION =========================
 # SCRIPT_PATH="run_with_rlct.py"
@@ -23,7 +22,6 @@ python $SCRIPT_PATH -m optimizer_config.default_lr=$lr hydra.job.chdir=True
 # do
 #     HYDRA_FULL_ERROR=1 python $SCRIPT_PATH -m +experiment=$experiment dataset.parity_task_config.num_hard_tasks=$n_hard dataset.parity_task_config.prob_simple_task_on_train=$p_simple $args rlct_config.use_distill_loss=True rlct_config.save_results=True
 # done
-
 
 # # ===================== DISTILLATION: RLCT ESTIMATION =========================# 
 # SCRIPT_PATH="run_distill_with_rlct.py"

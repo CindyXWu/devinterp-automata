@@ -98,10 +98,9 @@ class Run:
                 loss = criterion(logits, labels)
                 loss.backward()
                 self.optimizer.step()
-                self.scheduler.step()
-                lr = self.scheduler.get_last_lr()[0]
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = lr
+                if self.scheduler:
+                    self.scheduler.step()
+                self.lr = self.scheduler.get_last_lr()[0]
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
@@ -130,7 +129,7 @@ class Run:
         # test_acc, test_loss = evaluate(self.model, self.test_loader, subset=False)
         # self.test_acc_list.append(test_acc)
         
-        self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.config.optimizer_config.default_lr}, Loss Threshold: {self.config.loss_threshold}')
+        self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.lr}, Loss Threshold: {self.config.loss_threshold}')
         
         # wandb.log({"Train Acc": train_acc, "Test Acc": test_acc, "Train Loss": np.mean(train_loss), "Test Loss": np.mean(test_loss), "LR": self.config.optimizer_config.default_lr}, step=epoch)
         wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.config.optimizer_config.default_lr}, step=epoch)
