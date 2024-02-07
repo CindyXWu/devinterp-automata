@@ -2,7 +2,6 @@
 from typing import Tuple, List, Dict, TypedDict, TypeVar
 from pathlib import Path
 import numpy as np
-import pandas as pd
 from tqdm import tqdm
 import wandb
 import logging
@@ -58,10 +57,7 @@ class Run:
         config: MainConfig,
     ):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
         self.config = config
-        
-        self._set_logger()
         
         self.train_loader = create_dataloader_hf(self.config)
         
@@ -74,6 +70,8 @@ class Run:
         
         self.model_save_dir = Path(self.config.model_save_path)
         self.model_save_dir.mkdir(parents=True, exist_ok=True)
+        
+        self._set_logger()
     
     def train(self) -> None:
         criterion = nn.CrossEntropyLoss()
@@ -81,6 +79,7 @@ class Run:
         self.model.train()
         self.progress_bar = tqdm(total=self.config.num_training_iter)
         self.idx, self.epoch = 0, 0
+        self.lr = self.config.optimizer_config.default_lr
         
         for epoch in range(self.config.num_epochs):
             self.epoch += 1
@@ -95,12 +94,12 @@ class Run:
                 logits = self.model(inputs)
 
                 self.optimizer.zero_grad()
-                loss = criterion(logits, labels)
+                loss = criterion(logits, labels.long())
                 loss.backward()
                 self.optimizer.step()
                 if self.scheduler:
                     self.scheduler.step()
-                self.lr = self.scheduler.get_last_lr()[0]
+                    self.lr = self.scheduler.get_last_lr()[0]
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
@@ -204,7 +203,7 @@ def evaluate(
         visualise_seq_data(inputs, idx)
         outputs = model(inputs)
         
-        total_loss += F.cross_entropy(outputs, labels)
+        total_loss += F.cross_entropy(outputs, labels.long())
         # Second dimension is class dimension in PyTorch for sequence data (see AutoGPT transformer for details)
         probs = torch.softmax(outputs, dim=1)
         predictions = torch.argmax(probs, dim=1)
@@ -223,35 +222,6 @@ def update_with_wandb_config(config: OmegaConf, sweep_params: list[str]) -> Omeg
             print("Updating param with value from wandb config: ", param)
             OmegaConf.update(config, param, wandb.config[param], merge=True)
     return config
-
-
-# #TODO: need?
-# def create_dataloaders(
-#     dataset: Dataset,
-#     dl_config: DataLoaderConfig,
-# ) -> Tuple[DataLoader, DataLoader]:
-#     """For a given dataset and dataloader configuration, return test and train dataloaders with a deterministic test-train split on full dataset (set by seed - see configs)."""
-#     assert 0 <= dl_config.train_fraction <= 1, "train_fraction must be between 0 and 1."
-#     torch.manual_seed(dl_config.seed)
-#     train_size = int(dl_config.train_fraction * len(dataset))
-#     test_size = len(dataset) - train_size
-#     train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
-#     train_dataloader = DataLoader(train_dataset, batch_size=dl_config.train_bs, shuffle=dl_config.shuffle_train)
-#     test_dataloader = DataLoader(test_dataset, batch_size=dl_config.test_bs)   
-#     return train_dataloader, test_dataloader
-
-
-# TODO: need?
-def save_to_csv(
-    dataset: Dataset, 
-    filename: str,
-    input_col_name: str ='input',
-    label_col_name: str ='label'
-) -> None:
-    """Save a dataset to a csv file."""
-    data = [(str(x.numpy()), int(y.numpy())) for x, y in dataset]
-    df = pd.DataFrame(data, columns=[input_col_name, label_col_name])
-    df.to_csv(filename, index=False)
 
 
 def get_previous_commit_hash():

@@ -203,11 +203,10 @@ class Transformer(nn.Module):
 
         # --- forward the GPT model itself
         # token embeddings of shape (batch_size, seq_len, embed_dim)
-        try:
-            tok_emb = self.token_embedding(idx)  
-        except RuntimeError as e:
-            print(f"Runtimerror {e}")
-            tok_emb = self.token_embedding(idx.int().to(device))  
+        if idx.dtype in [torch.cuda.DoubleTensor, torch.float64]:
+            tok_emb = self.token_embedding(idx.int()) 
+        else:
+            tok_emb = self.token_embedding(idx)
             
         assert tok_emb.dtype == torch.float32, f"tok_emb dtype is {tok_emb.dtype}, but expected torch.float32"
         # position embeddings of shape (1, seq_len, embed_dim)

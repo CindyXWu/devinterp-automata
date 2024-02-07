@@ -1,0 +1,8 @@
+dataset_type: abab
+size: 60000
+length: 25
+random_length: false
+seed: null
+n: 5
+generators: [[1,0,2,3,4], [4,0,1,2,3]] # Need to make sure number of members in each generator is same as n
+perm_probs: null

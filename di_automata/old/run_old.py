@@ -8,7 +8,7 @@ import wandb
 from hydra.core.config_store import ConfigStore
 from typing import Dict
 
-from create_sweep import construct_sweep_config, load_config
+from scripts.create_sweep import construct_sweep_config, load_config
 from config_setup import MainConfig
 from di_automata.constructors import model_constructor, optimizer_constructor, create_dataloaders
 from devinterp.optim.sgld import SGLD

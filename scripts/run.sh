@@ -8,7 +8,7 @@ lr="0.001,0.003,0.001,0.03"
 python $SCRIPT_PATH -m optimizer_config.default_lr=$lr hydra.job.chdir=True
 
 ## To put straight into vscode:
-# HYDRA_FULL_ERROR=1 python scripts/run.py optimizer_config.default_lr=0.001 hydra.job.chdir=True dataset_type=adder task_config_config=adder
+# HYDRA_FULL_ERROR=1 python scripts/run.py optimizer_config.default_lr=0.001 hydra.job.chdir=True dataset_type=adder task_config=adder
 
 # # ===================== TEACHER ONLY: RLCT ESTIMATION =========================
 # SCRIPT_PATH="run_with_rlct.py"

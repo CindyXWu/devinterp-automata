@@ -1,7 +1,8 @@
-dataset_type: alternating
+dataset_type: gridworld
 size: 60000
-length: 25
+length: 10
 random_length: false
 seed: null # If set to non-null value, same data seen each epoch (dig into guts of np_rng in Automaton datasets)
-n: 5
+prob1: 0.5
+n: 2
 label_type: state

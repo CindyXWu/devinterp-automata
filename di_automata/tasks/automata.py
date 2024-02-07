@@ -12,17 +12,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import csv
-import json
-import os
 import itertools
 import math
 from sympy.combinatorics.permutations import Permutation
-
-from di_automata.config_setup import MainConfig
 import datasets
 import numpy as np
 from copy import copy
+from omegaconf import OmegaConf, ListConfig, DictConfig
+
+from di_automata.config_setup import MainConfig
 
 # Check Python version
 import sys
@@ -180,6 +178,7 @@ class BinaryInputAutomaton(Automaton):
 class ParityAutomaton(BinaryInputAutomaton):
     def __init__(self, data_config):
         super().__init__(data_config)
+        
         self.name = 'parity'
 
         self.__info__ = "Parity machine with 2 states: \n" \
@@ -202,6 +201,7 @@ class GridworldAutomaton(BinaryInputAutomaton):
         NOTE: n is the number of states, and S is the id (0-indexing) of the rightmost state.
             i.e. the states are 0,1,2,...,S, where S=n-1.
         """
+        
         self.n = data_config['n'] 
         self.S = self.n - 1
         self.label_type = data_config['label_type']
@@ -235,10 +235,10 @@ class GridworldAutomaton(BinaryInputAutomaton):
 class ABABAutomaton(BinaryInputAutomaton):
     def __init__(self, data_config):
         super().__init__(data_config)
+        
         self.name = 'abab'
         self.prob_abab_pos_sample = data_config['prob_abab_pos_sample']
         self.label_type = data_config['label_type']
-
         self.transition = np.array([
             [4, 1], # state 0
             [2, 4], # state 1
@@ -283,6 +283,7 @@ class ABABAutomaton(BinaryInputAutomaton):
 class AdderAutomaton(BinaryInputAutomaton):
     def __init__(self, data_config):
         super().__init__(data_config)
+        
         self.name = 'addition'
         self.n_addends = data_config["n_addends"]
         self.addend_scales = np.array([2**i for i in range(self.n_addends)]).reshape(-1, 1)
@@ -337,13 +338,14 @@ class AdderAutomaton(BinaryInputAutomaton):
 class FlipFlopAutomaton(Automaton):
     def __init__(self, data_config):
         super().__init__(data_config)
+        
         self.name = 'flipflop'
         self.n_states = data_config['n'] 
         self.n_actions = self.n_states + 1
         self.transition = np.array([list(range(self.n_actions))] + [[i+1]*self.n_actions for i in range(self.n_states)]).T
 
         self.__info__ = f"Flipflop with n={self.n_states} states:\n" \
-            +f"- Inputs: tokens are either 0 (read) or 1:{self.n} (write).\n" \
+            +f"- Inputs: tokens are either 0 (read) or 1:{self.n_states} (write).\n" \
             + "- Labels: the state id.\n" \
             + "- Config:\n" \
             + "  - n (int): number of write states; i.e. the states are 1,2,...,n, plus a default start state 0.\n" \
@@ -354,7 +356,7 @@ class FlipFlopAutomaton(Automaton):
         for action_id in x:
             state = self.transition[state, action_id]
             states += state,
-        return np.array(states)
+        return np.array(states).astype(np.float32)
 
     def sample(self):
         T = self.sample_length()
@@ -372,6 +374,7 @@ class PermutationAutomaton(Automaton):
     """
     def __init__(self, data_config):
         super().__init__(data_config) 
+        
         self.n = data_config['n'] # the symmetric group Sn
         self.label_type = data_config['label_type']
 
@@ -507,7 +510,9 @@ class AlternatingAutomaton(PermutationAutomaton):
 class CyclicAutomaton(Automaton):
     def __init__(self, data_config):
         super().__init__(data_config)
+        
         self.n = data_config['n']
+        
         """
         Get actions: shift by i positions, for i = 0 to n_actions-1
         """
@@ -539,14 +544,8 @@ class CyclicAutomaton(Automaton):
 class DihedralAutomaton(Automaton):
     def __init__(self, data_config):
         super().__init__(data_config)
-
-        if 'n' not in data_config:
-            data_config['n'] = 4
+        
         self.n = data_config['n']
-
-        if 'label_type' not in data_config:
-            # Options: 'state', 'toggle', 'position'
-            data_config['label_type'] = 'state'
         self.label_type = data_config['label_type']
 
         """
@@ -668,20 +667,24 @@ class PermutationResetAutomaton(Automaton):
         self.n = data_config['n']
         self.generators = data_config['generators']
         self.perm_probs = data_config['perm_probs']
+        
         if type(self.generators[0]) is str:
             self.generators = [ np.array(list(map(int, list(g)))) for g in self.generators ]
+        # Cast generators from ListConfig object to numpy array for indexing (hack for using Hydra)
+        if isinstance(self.generators, (ListConfig, DictConfig)):
+            self.generators = np.array(OmegaConf.to_container(self.generators, structured_config_mode="DICT"))
 
-        self.n_states = math.factorial(self.n) # states = permutations; maybe rename
-        self.n_generators = len(self.generators) # actions = generators
+        self.n_states = math.factorial(self.n) # States = permutations; maybe rename
+        self.n_generators = len(self.generators) # Actions = generators
         self.n_actions = self.n_states + self.n_generators # 1 reset symbol per state, 1 apply symbol per generator
 
-        self.init_state = np.arange(self.n) # identity permutation
+        self.init_state = np.arange(self.n) # Identity permutation
         
-        # lookup tables
+        # Lookup tables
         self.int2perm = list(map(np.array, itertools.permutations(range(self.n))))
         self.perm2int = {tuple(p):i for i,p in enumerate(self.int2perm)}
         
-        # interval lengths
+        # Interval lengths
         T = self.sample_length()
         self.lags = [1]
         while self.lags[-1]*2 < T:

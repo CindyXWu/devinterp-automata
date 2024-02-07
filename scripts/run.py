@@ -1,7 +1,7 @@
 import hydra
 from omegaconf import OmegaConf
 
-from di_automata.create_sweep import load_config
+from scripts.create_sweep import load_config
 from di_automata.config_setup import MainConfig
 from di_automata.train_utils import Run, update_with_wandb_config
 from di_automata.config_setup import MainConfig
@@ -10,10 +10,11 @@ from di_automata.config_setup import MainConfig
 config_filename = "main_config"
 sweep_filename = ""
 
-# # Drop use of ConfigStore to make Pydantic play nice with Hydra
+# # Legacy code: drop use of ConfigStore to make Pydantic play nice with Hydra
 # cs = ConfigStore.instance()
 # cs.store(name="config_base", node=HydraConf)
-    
+
+
 @hydra.main(config_path="configs/", config_name=config_filename)
 def main(config: MainConfig) -> None:
     """config is typed as MainConfig for duck-typing, but during runtime it's actually an OmegaConf object.
@@ -23,11 +24,14 @@ def main(config: MainConfig) -> None:
     # if config.wandb_config.sweep:
     #     config = update_with_wandb_config(config, sweep_params)
     
+    # Convert OmegaConf object to dictionary before p
+    # config = OmegaConf.to_container(config, resolve=True)
     OmegaConf.resolve(config)
     # Convert OmegaConf object to MainConfig pydantic model for dynamic type validation
     pydantic_config = MainConfig(**config)
     # Convert back to OmegaConf object for compatibility with existing code
     omegaconf_config = OmegaConf.create(pydantic_config.dict())
+
     run = Run(omegaconf_config)
     run.train()
 

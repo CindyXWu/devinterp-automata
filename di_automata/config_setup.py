@@ -156,6 +156,12 @@ class DatasetConfig(BaseModel):
     
     @property
     @abstractmethod
+    def vocab_size(self):
+        """Determine input vocab size of transformer."""
+        pass
+        
+    @property
+    @abstractmethod
     def output_vocab_size(self):
         """Abstract method to determine output vocabulary size of transformer."""
         pass
@@ -163,11 +169,14 @@ class DatasetConfig(BaseModel):
     
 class BinaryInputAutomatonConfig(DatasetConfig):
     """Parent class for Parity, GridWorld, ABAB."""
-    prob1: Optional[float] = Field(default=0.5, description="(float in [0,1]): probability of token 1")
-    vocab_size: Optional[int] = Field(default=2, description="Vocab size of dataset input (e.g. 2 for binary input)")
+    prob1: float = Field(default=0.5, description="(float in [0,1]): probability of token 1")
 
 
-class ParityAutomatonConfig(BinaryInputAutomatonConfig): 
+class ParityAutomatonConfig(BinaryInputAutomatonConfig):
+    @property
+    def vocab_size(self):
+        return 2
+     
     @property
     def output_vocab_size(self):
         return 2
@@ -185,6 +194,10 @@ class GridworldAutomatonConfig(BinaryInputAutomatonConfig):
             + "    - 'boundary': whether the current state is in {0, n-1} or not.")
     
     @property
+    def vocab_size(self): # TODO: check
+        return 2
+    
+    @property
     def output_vocab_size(self):
         match self.label_type:
             case GridworldAutomatonConfig.Label.STATE: return self.n
@@ -200,6 +213,10 @@ class ABABAutomatonConfig(BinaryInputAutomatonConfig):
     label_type: Optional[Label] = Field(default=Label.STATE, description="- 'state' (default): the state id.\n" \
             + "    - 'boundary': whether the state is in state 3 (the states are 0,1,2,3).")
 
+    @property
+    def vocab_size(self):
+        return 2
+    
     @property
     def output_vocab_size(self):
         match self.label_type:
@@ -220,11 +237,22 @@ class AdderAutomatonConfig(BinaryInputAutomatonConfig):
             + "    - 'position': the current carry bit.")
     
     @property
+    def vocab_size(self):
+        """
+        Can have more than 2 despite binary input due to:
+        0: Represents no sum and no carry (all inputs are 0).
+        1: Represents a sum of 1 with no carry (exactly one input is 1, and there is no carry from the previous position, or it's the result of a carry without any 1s in the current position).
+        2: Represents a sum of 2 or a carry and one input being 1 (two inputs are 1, or one input and a carry from the previous position).
+        3: Represents a sum of 3 (two inputs are 1, and there is also a carry from the previous position)
+        """
+        return 4
+    
+    @property
     def output_vocab_size(self):
         match self.label_type:
             # Int for the base-{self.n_addends} int corresponding to the number (carry, digit).
             # Adding n_addends binary numbers so max sum at any position is 2**n - 1 (input all 1s) and carry can be at most 1. So total states is 2 * (2**self.n_addends - 1).
-            case AdderAutomatonConfig.Label.STATE: return 2 * (2**self.n_addends -1)
+            case AdderAutomatonConfig.Label.STATE: return 2 * (2**self.n_addends - 1)
             case AdderAutomatonConfig.Label.DIGIT: return self.n_addends # Current output base-{self.n_addends} digit, without the carry.
             case AdderAutomatonConfig.Label.POSITION: return 2 # Current carry bit.
 
@@ -233,9 +261,13 @@ class FlipFlopAutomatonConfig(DatasetConfig):
     n: Optional[int] = Field(default=2, description="Number of states")
     
     @property
+    def vocab_size(self):
+        return self.n + 1
+    
+    @property
     def output_vocab_size(self):
         """For flip flop automaton the only output possibility is the state."""
-        return self.n
+        return self.n + 1
     
 
 class PermutationAutomatonConfig(DatasetConfig):
@@ -249,6 +281,10 @@ class PermutationAutomatonConfig(DatasetConfig):
     label_type: Optional[Label] = Field(default=Label.STATE, description="- 'state' (default): the state id.\n" \
             + "    - 'first_chair': the element in the first position of the permutation.\n" \
             + "          e.g. if the current permutation is [2,1,4,3], then 'first_chair' is 2.")
+    
+    @property
+    def vocab_size(self):
+        return self.n
 
     @property
     def output_vocab_size(self):
@@ -274,10 +310,95 @@ class CyclicAutomatonConfig(DatasetConfig):
     n_actions: Optional[int] = Field(default=2, description="Number of actions/generators, which shift by i positions, for i = 0 to n_actions-1.")
     
     @property
+    def vocab_size(self):
+        return self.n
+    
+    @property
     def output_vocab_size(self):
         return self.n
 
-# ## TODO: classes for Dihedral, Quaternion, PermutationReset
+
+class DihedralAutomatonConfig(DatasetConfig):
+    class Label(str, Enum):
+        """Types of labels possible for this class."""
+        STATE = "state"
+        TOGGLE = "toggle"
+        POSITION = "position"
+        
+    n: Optional[int] = Field(default=4, description="Size of the 'cycle'. There are 2n states considering also the toggle bit.")
+    label_type: Optional[Label] = Field(default=Label.STATE, description="'state': the state id, i.e. considering both toggle and position. \n" \
+            + "    - 'toggle': the toggle bit (in {0, 1}). \n" \
+            + "    - 'position': the position on the n-cycle (in [n]).")
+
+    @property
+    def vocab_size(self):
+        return self.n
+    
+    @property
+    def output_vocab_size(self):
+        match self.label_type:
+            case DihedralAutomatonConfig.Label.STATE: return self.n * 2 # Toggle 0,1 and state
+            case DihedralAutomatonConfig.Label.TOGGLE: return 2 # Toggle bit in {0, 1}
+            case DihedralAutomatonConfig.Label.POSITION: return self.n # Position on the n-cycle in [1,...n]
+    
+
+class QuaternionAutomatonConfig(DatasetConfig):
+    """This class is a simple creature."""
+    @property
+    def vocab_size(self):
+        return 4
+
+    @property
+    def output_vocab_size(self):
+        return 8
+    
+
+class PermutationResetAutomatonConfig(DatasetConfig):
+    """Input to automaton is an action, which can either be application of a generator or a reset to a particular state. 
+    
+    Generators modify the current state based on the permutation they represent.
+    Reset action directly sets the current state to a specific permutation.
+    """
+    n: int = Field(default=4, description="Should take values 4 or 5.")
+    generators: Any = Field(default=[[1,0,2,3,4], [4,0,1,2,3]], description="List of generators for permutation group.")
+    perm_probs: Optional[list[float]] = Field(default=None, description="Probability of any of the generator lists from generators. If not specified, return uniform distribution via validator method.")
+    
+    @validator("generators", pre=True, always=True)
+    def check_generators(cls, v, values):
+        n = values.get("n")
+        assert len(v[0]) == n, "Generators must be of length n."
+        return v
+        
+    @validator("perm_probs", pre=True, always=True)
+    def set_perm_probs(cls, v, values):
+        """
+        Args:
+            v: perm_probs value.
+            values: dictionary of class attribute values.
+        """
+        if v is None:
+            generators = values.get("generators", [])
+            n_generators = len(generators)
+            uniform_prob = 1.0 / n_generators if n_generators > 0 else 0
+            return [uniform_prob for _ in range(n_generators)]
+        return v
+
+    @property
+    def vocab_size(self):
+        """There is one reset action for each possible state. 
+        The number of possible states is n! since there are n! possible permutations of n elements.
+        
+        Total input vocabulary size (number of unique actions the automaton can take) is sum of number of generators and number of reset actions.
+        """
+        return math.factorial(self.n) + len(self.generators)
+
+    @property
+    def output_vocab_size(self):
+        """The output of the automaton is the state after an action is applied. 
+        State is represented by a permutation of n elements.
+        """
+        return math.factorial(self.n)
+
 
 class RLCTSamplerType(str, Enum):
     SGLD = "SGLD"
@@ -391,6 +512,8 @@ class MainConfig(BaseModel):
         if v["nano_gpt_config"] and task_config:
             nano_gpt_config = v["nano_gpt_config"]
             nano_gpt_config["block_size"] = task_config["length"] + 1 # Add one for adder class in case of carry
+            # The next two are properties and instiated only when a Pydantic object is created - do not access through values directly
+            nano_gpt_config["vocab_size"] = task_config_instance.vocab_size
             nano_gpt_config["output_vocab_size"] = task_config_instance.output_vocab_size
             v["nano_gpt_config"] = nano_gpt_config
             
@@ -399,12 +522,13 @@ class MainConfig(BaseModel):
 config_class_map = {
     "abab": ABABAutomatonConfig,
     "adder": AdderAutomatonConfig,
+    "alternating": AlternatingAutomatonConfig,
     "cyclic": CyclicAutomatonConfig,
+    "dihedral": DihedralAutomatonConfig,
     "flipflop": FlipFlopAutomatonConfig,
     "gridworld": GridworldAutomatonConfig,
     "parity": ParityAutomatonConfig,
-    # "quaternion": QuaternionAutomatonConfig,
-    # "permutation_reset": PermutationResetAutomatonConfig,
-    # "dihedral": DihedralAutomatonConfig,
+    "quaternion": QuaternionAutomatonConfig,
+    "permutation_reset": PermutationResetAutomatonConfig,
     "symmetric": SymmetricAutomatonConfig,
 }

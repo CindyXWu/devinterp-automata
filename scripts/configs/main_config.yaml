@@ -34,7 +34,7 @@ dataloader_config:
 
 nano_gpt_config:
   block_size: 100
-  vocab_size: 2 # Will be updated automatically based on dataset
+  vocab_size: 4 # Will be updated automatically based on dataset
   output_vocab_size: 2 # Will be updated automatically based on dataset
   n_layers: 3
   n_heads: 8

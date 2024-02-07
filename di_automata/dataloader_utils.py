@@ -8,25 +8,6 @@ from torch.utils.data import DataLoader
 from numpy.random import SeedSequence, Generator, default_rng
 
 
-def get_input_shape(dataset: Dataset) -> tuple[int, ...]:
-    """
-    Get the input shape of a dataset. This is useful for constructing the model.
-
-    Assumes a supervised dataset (x, y)
-    """
-    return dataset[0][0].shape
-
-
-def get_output_size(dataset: Union[CIFAR10, MNIST]) -> int:
-    """
-    Get the output size of a dataset. This is useful for constructing the model.
-
-    Assumes a supervised dataset (x, y)
-    """
-    # TODO: Generalise for text data.
-    return len(dataset.classes)
-
-
 def get_generator_for_worker(seed_seq: SeedSequence) -> Generator:
     """Get a generator for a worker. Useful in multi-process data loading. Will NOT
     give the same rng sequence for different number of workers, but will give the same
@@ -40,34 +21,6 @@ def get_generator_for_worker(seed_seq: SeedSequence) -> Generator:
         worker_seed = seed_seq.generate_state(worker_info.num_workers)[worker_info.id]
         rng = default_rng(worker_seed)
     return rng
-
-
-def get_data_loaders(
-    train_dataset: Dataset,
-    eval_datasets: dict[str, Dataset],
-    train_batch_size: int = 128,
-    eval_batch_size: int = 512,
-    num_workers: int = 4,
-    pin_memory: bool = False,
-) -> tuple[DataLoader, dict[str, DataLoader]]:
-    """Generic data loader function (don't use for anything beyond cursory CIFAR10 loading)."""
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=train_batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
-    eval_loaders = dict()
-    for eval_dataset_name, eval_dataset in eval_datasets.items():
-        eval_loaders[eval_dataset_name] = DataLoader(
-            eval_dataset,
-            batch_size=eval_batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        )
-    return train_loader, eval_loaders
 
 
 T = TypeVar("T")
