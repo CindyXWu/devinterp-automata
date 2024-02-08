@@ -52,14 +52,14 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
     VERSION = datasets.Version("0.0.0")
     BUILDER_CONFIGS = []
     
-    def __init__(self, config: MainConfig, **kwargs):
+    def __init__(self, config: DictConfig, **kwargs):
         super().__init__(**kwargs)
         
         """
-        Set default configs.
+        Class instantion handled by this parent class (cursed).
         
-        All config validation is in the config_setup.py file.
-        Not best to have instance of class instantion handled by this parent class, but it is what it is...
+        Params:
+            config: task_config from main config.
         """
         self.dataset_map = {
             'abab': ABABAutomaton,
@@ -75,10 +75,9 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
             'permutation_reset': PermutationResetAutomaton
             # TODO: add Dyck
         }
-        self.config = config
-        self.data_config = getattr(config, 'task_config')
+        self.data_config = config
         # Instantiated dataset class object
-        self.automaton = self.dataset_map[config.dataset_type](self.data_config)
+        self.automaton = self.dataset_map[self.data_config.dataset_type](self.data_config)
 
     def _info(self):
         features = datasets.Features(
@@ -106,26 +105,26 @@ class AutomatonDataset(datasets.GeneratorBasedBuilder):
             )
         ]
 
-    def _generate_examples(self):
-        """Cindy note: I don't use this function in my code."""
-        for i in itertools.count(start=0):
-            if i == self.data_config.size:
-                break
-            x, y = self.automaton.sample()
-            yield i, {
-                "input_ids": x,
-                "label_ids": y
-            }
+    # def _generate_examples(self):
+    #     """Cindy note: I don't use this function in my code, but directly go for sample() in child class."""
+    #     for i in itertools.count(start=0):
+    #         if i == self.data_config.size:
+    #             break
+    #         x, y = self.automaton.sample()
+    #         yield i, {
+    #             "input_ids": x,
+    #             "label_ids": y
+    #         }
 
 
 class Automaton:
     """
     This is a parent class that must be inherited.
     """
-    def __init__(self, data_config: MainConfig):
+    def __init__(self, data_config: DictConfig):
         self.data_config = data_config
 
-        if hasattr(self.data_config, 'seed'):
+        if hasattr(self.data_config, 'seed') and data_config["seed"] is not None:
             self.np_rng = np.random.default_rng(self.data_config['seed'])
         else:
             self.np_rng = np.random.default_rng()

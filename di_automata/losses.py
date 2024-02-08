@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 def predictive_kl_loss(x: Tensor, y: Tensor, teacher_model: nn.Module, student_model: nn.Module, temperature: float = 1., **kwargs) -> tuple[Tensor, Tensor]:
     """
@@ -19,3 +19,7 @@ def predictive_kl_loss(x: Tensor, y: Tensor, teacher_model: nn.Module, student_m
         ),
         student_logits,
     )
+    
+
+def ce_rlct_loss(out: Tensor, y: Tensor) -> Tensor:
+    return F.cross_entropy(out.reshape(-1, out.size(-1)), y.view(-1))

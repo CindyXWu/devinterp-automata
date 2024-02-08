@@ -1,7 +1,6 @@
-from typing import Callable, Dict, Literal, Optional, Type, Union
+"""Version of learning_coefficient.py updated with callbacks."""
+from typing import Callable, Dict, List, Literal, Optional, Type, Union
 
-import numpy as np
-import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
@@ -60,7 +59,8 @@ class LLCEstimator(SamplerCallback):
     
     def __call__(self, chain: int, draw: int, loss: float):
         self.update(chain, draw, loss)
-        
+
+
 
 class OnlineLLCEstimator(SamplerCallback):
     """
@@ -103,82 +103,85 @@ class OnlineLLCEstimator(SamplerCallback):
                     (t - 1) * prev_llc + (self.n / self.n.log()) * (loss - init_loss)
                 )
 
+    @property
+    def init_loss(self):
+        return self.losses[:, 0].mean()
 
+    def finalize(self):
+        self.llc_means = self.llcs.mean(dim=0)
+        self.llc_stds = self.llcs.std(dim=0)
 
-def estimate_learning_coeff(
-    loader: DataLoader,
-    criterion: Callable,
-    main_config: MainConfig,
-    sampling_method: Type[torch.optim.Optimizer] = SGLD,
-    checkpoint: Optional[dict] = None,
-    optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
-    device: torch.device = torch.device("cpu"),
-) -> float:
-    trace = sample(
-        loader=loader,
-        criterion=criterion,
-        main_config=main_config,
-        checkpoint=checkpoint,
-        sampling_method=sampling_method,
-        optimizer_kwargs=optimizer_kwargs,
-        device=device,
-    )
-    baseline_loss = trace.loc[trace["chain"] == 0, "loss"].iloc[0]
-    avg_loss = trace.groupby("chain")["loss"].mean().mean()
-    num_samples = optimizer_kwargs["num_samples"]
-
-    return (avg_loss - baseline_loss) * num_samples / np.log(num_samples)
+    def sample(self):
+        return {
+            "llc/means": self.llc_means.cpu().numpy(),
+            "llc/stds": self.llc_stds.cpu().numpy(),
+            "llc/trace": self.llcs.cpu().numpy(),
+            "loss/trace": self.losses.cpu().numpy()
+        }
+    
+    def __call__(self, chain: int, draw: int, loss: float):
+        self.update(chain, draw, loss)
 
 
 def estimate_learning_coeff_with_summary(
+    model: torch.nn.Module,
     loader: DataLoader,
     criterion: Callable,
     main_config: MainConfig,
-    checkpoint: Optional[dict] = None,
     sampling_method: Type[torch.optim.Optimizer] = SGLD,
     optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
     device: torch.device = torch.device("cpu"),
+    callbacks: List[Callable] = [],
+    online: bool = False,
 ) -> dict:
-    trace = sample(
+    
+    num_chains = main_config.rlct_config.num_chains
+    num_draws = main_config.rlct_config.num_draws
+    if online:
+        llc_estimator = OnlineLLCEstimator(num_chains, num_draws, optimizer_kwargs['num_samples'], device=device)
+    else:
+        llc_estimator = LLCEstimator(num_chains, num_draws, optimizer_kwargs['num_samples'], device=device)
+
+    callbacks = [llc_estimator, *callbacks]
+
+    sample(
+        model=model,
         loader=loader,
         criterion=criterion,
-        main_config=main_config,
-        checkpoint=checkpoint,
         sampling_method=sampling_method,
         optimizer_kwargs=optimizer_kwargs,
+        main_config=main_config,
         device=device,
+        callbacks=callbacks,
     )
 
-    num_chains = main_config.rlct_config.num_chains
-    
-    baseline_loss = trace.loc[trace["chain"] == 0, "loss"].iloc[0]
-    num_samples = optimizer_kwargs["num_samples"]
-    avg_losses = trace.groupby("chain")["loss"].mean()
-    results = torch.zeros(num_chains, device=device)
+    results = {}
 
-    for i in range(num_chains):
-        chain_avg_loss = avg_losses.iloc[i]
-        results[i] = (chain_avg_loss - baseline_loss) * num_samples / np.log(num_samples)
+    for callback in callbacks:
+        if hasattr(callback, "sample"):
+            results.update(callback.sample())
 
-    avg_loss = results.mean()
-    std_loss = results.std()
-
-    return {
-        "mean": avg_loss.item(),
-        "std": std_loss.item(),
-        **{f"chain_{i}": results[i].item() for i in range(num_chains)},
-        "trace": trace,
-    }
+    return results
 
 
-def plot_learning_coeff_trace(trace: pd.DataFrame, **kwargs):
-    import matplotlib.pyplot as plt
-
-    for chain, df in trace.groupby("chain"):
-        plt.plot(df["step"], df["loss"], label=f"Chain {chain}", **kwargs)
-
-    plt.xlabel("Step")
-    plt.ylabel(r"$L_n(w)$")
-    plt.title("Learning Coefficient Trace")
-    plt.legend()
-    plt.show()
+def estimate_learning_coeff(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    criterion: Callable,
+    main_config: MainConfig,
+    sampling_method: Type[torch.optim.Optimizer] = SGLD,
+    optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
+    device: torch.device = torch.device("cpu"),
+    callbacks: List[Callable] = [],
+) -> float:
+    return estimate_learning_coeff_with_summary(
+        model=model,
+        loader=loader,
+        criterion=criterion,
+        sampling_method=sampling_method,
+        optimizer_kwargs=optimizer_kwargs,
+        main_config=main_config,
+        device=device,
+        callbacks=callbacks,
+        online=False,
+    )["llc/mean"]

@@ -5,12 +5,12 @@ dataset_type: adder
 model_type: NANO_GPT
 parameterisation: MUP
 
-num_training_iter: 100000
-eval_frequency: 500 # If not specified then use length of dataset (dataloader length)
+num_training_iter: 10000
+eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
 loss_threshold: 0.01
 num_eval_batches: 20
 model_save_path: "trained_models"
-save_local: true # Probably change if running on cloud
+save_local: false # Probably change if running on cloud
 run_name: null
 is_wandb_enabled: false
 num_epochs: null
@@ -45,19 +45,8 @@ nano_gpt_config:
 
 rlct_config:
   sampling_method: SGLD
+  rlct_loss_type: ce
   sigma: 0.25
-  sgld_kwargs:
-    lr: 5e-7
-    noise_level: 1.0
-    weight_decay: 3e-7
-    elasticity: 1.0
-    temperature: "adaptive"
-    num_samples: 10000 # Default could also be length of dataset, but here have iterable
-  sgnht_kwargs:
-    lr: 5e-7
-    diffusion_factor: 0.01
-    bounding_box_size: 0.5
-    num_samples: 10000 # Default could also be length of dataset, but here have iterable
   num_chains: 10
   num_draws: 100
   num_burnin_steps: 0 
@@ -72,6 +61,24 @@ rlct_config:
   return_weights: true
   use_distill_loss: true
   save_results: true
+
+  sgld_kwargs:
+    lr: 5e-7
+    noise_level: 1.0
+    weight_decay: 3e-7
+    elasticity: 1.0
+    temperature: adaptive
+    num_samples: 10000 # Default could also be length of dataset, but here have iterable
+  sgnht_kwargs:
+    lr: 5e-7
+    diffusion_factor: 0.01
+    bounding_box_size: 0.5
+    num_samples: 10000 # Default could also be length of dataset, but here have iterable
+  ed_config:
+    batches_per_checkpoint: 200
+
+  rlct_model_save_dir: null
+  rlct_data_dir: null
 
 wandb_config:
   log_to_wandb: true

@@ -5,4 +5,5 @@
 **/multirun/
 
 # Visual Studio Code
-**/.vscode/
+.vscode/launch.json
+*.json

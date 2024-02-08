@@ -1,15 +1,20 @@
-from typing import Union, Optional, Generator
+from typing import Union, Optional
 import numpy as np
 import logging
-import os
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-from di_automata.config_setup import MainConfig, ModelType, ParameterisationType, DatasetConfig, OptimizerType
+from di_automata.config_setup import (
+    MainConfig,
+    ModelType,
+    ParameterisationType,
+    OptimizerType,
+    RLCTLossType,
+)
+from di_automata.losses import predictive_kl_loss, ce_rlct_loss
 from di_automata.architectures.nano_gpt import Transformer
-from di_automata.tasks.automata import AutomatonDataset
 from di_automata.tasks.data_utils import TorchDatasetFromIterable
 from di_automata.mup.inf_types import InfParam, get_inf_types, get_params_without_init
 from di_automata.mup.init import (
@@ -25,26 +30,13 @@ from di_automata.mup.optim_params import (
 from di_automata.mup.utils import get_param_name
 
 
-# TODO: edit this function to work with this codebase
-def create_or_load_dataset(dataset_type: str, dataset_config: DatasetConfig) -> Dataset:
-    """Create or load an existing dataset based on a specified filepath and dataset type."""
-    filepath = f'{dataset_config.data_folder}/{dataset_config.dataset_filename}.pt'
-    if os.path.exists(filepath):
-        dataset = torch.load(filepath)
-    else:
-        dataset_type = globals()[dataset_type]
-        dataset = dataset_type(dataset_config)
-        torch.save(dataset, filepath)
-    return dataset
-
-
-def create_dataloader_hf(config: MainConfig) -> DataLoader:
+def create_dataloader_hf(config: MainConfig, deterministic: Optional[bool] = False) -> DataLoader:
     """Load dataset from automata.py.
     
     Note the Automata dataset class automatically handles which instance of which dataclass it is based on the config parameters.
     """
     # Wrap generator with custom IterableDataset which instantiates a new automaton dataset instance per epoch
-    iterable_dataset = TorchDatasetFromIterable(config)
+    iterable_dataset = TorchDatasetFromIterable(config["task_config"], deterministic)
     train_loader = DataLoader(iterable_dataset, batch_size=config.dataloader_config.train_bs)
     return train_loader
 
@@ -238,3 +230,10 @@ class LRScheduler(object):
 
     def get_lr(self):
         return self.current_lr
+
+
+def construct_rlct_criterion(config: MainConfig):
+    if config.rlct_config.rlct_loss_type == RLCTLossType.CE:
+        return ce_rlct_loss
+    elif config.rlct_config.rlct_loss_type == RLCTLossType.DISTILL:
+        return predictive_kl_loss

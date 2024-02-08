@@ -1,18 +1,18 @@
 from di_automata.tasks.automata import AutomatonDataset
 from torch.utils.data import IterableDataset
-from typing import Iterable, TypeVar, Optional, Iterator
+from typing import Iterable, TypeVar, Optional, Iterator, Dict
 T = TypeVar("T")
 
 
 class TorchDatasetFromIterable(IterableDataset):
-    def __init__(self, config):
+    def __init__(self, task_config: Dict, deterministic: bool):
         super(TorchDatasetFromIterable, self).__init__()
-        self.config = config
+        task_config["seed"] = 42 if deterministic else None
+        self.automaton_dataset = AutomatonDataset(task_config)
         
     def __iter__(self):
-        automaton_dataset = AutomatonDataset(self.config)
         while True:
-            x, y = automaton_dataset.automaton.sample()
+            x, y = self.automaton_dataset.automaton.sample()
             yield {
                 "input_ids": x,
                 "label_ids": y

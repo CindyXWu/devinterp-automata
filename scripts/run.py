@@ -24,16 +24,17 @@ def main(config: MainConfig) -> None:
     # if config.wandb_config.sweep:
     #     config = update_with_wandb_config(config, sweep_params)
     
-    # Convert OmegaConf object to dictionary before p
-    # config = OmegaConf.to_container(config, resolve=True)
+    # Convert OmegaConf object to dictionary before passing into Pydantic
     OmegaConf.resolve(config)
-    # Convert OmegaConf object to MainConfig pydantic model for dynamic type validation
+    # Convert OmegaConf object to MainConfig Pydantic model for dynamic type validation - NECESSARY DO NOT SKIP
     pydantic_config = MainConfig(**config)
     # Convert back to OmegaConf object for compatibility with existing code
     omegaconf_config = OmegaConf.create(pydantic_config.dict())
 
     run = Run(omegaconf_config)
     run.train()
+    run.ed_calculation()
+    run.finish_run()
 
 
 # def run_sweep():

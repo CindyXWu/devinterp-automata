@@ -35,6 +35,11 @@ class DistributionType(str, Enum):
     UNIFORM = "UNIFORM"
 
 
+class RLCTLossType(str, Enum):
+    CE = "ce"
+    DISTILL = "distill"
+    
+    
 class ParameterisationType(str, Enum):
     """
     The parameterisation of the initialisation scales and learning rates.
@@ -421,29 +426,39 @@ class SGLD_Kwargs(BaseModel):
     num_samples: int
 
 
+class EssentialDynamicsConfig(BaseModel):
+    batches_per_checkpoint: int
+    
+    
 class RLCTConfig(BaseModel):
+    rlct_loss_type: RLCTLossType
     sampling_method: RLCTSamplerType
     sigma: float
-    num_chains: int
-    num_draws: int
-    num_burnin_steps: int
-    num_steps_bw_draws: int
+    num_chains: int = Field(default=10)
+    num_draws: int = Field(default=100)
+    num_burnin_steps: int = Field(default=0, description="Don't think this has been properly implemented yet.")
+    num_steps_bw_draws: int = Field(default=1)
     batch_size: int
-    cores: int
+    cores: int = Field(default=1)
     use_distill_loss: bool
     save_results: bool
-    seed: Optional[Union[int, List[int]]] = Field(default=None)
-    pbar: Optional[bool] = Field(default=True)
+    seed: Optional[Union[int, List[int]]]
     verbose: Optional[bool] = Field(default=True)
     return_weights: Optional[bool] = Field(default=True)
-    sgld_kwargs: Optional[SGLD_Kwargs] = Field(default=None)
-    sgnht_kwargs: Optional[SGNHT_Kwargs] = Field(default=None)
+    
+    sgld_kwargs: Optional[SGLD_Kwargs]
+    sgnht_kwargs: Optional[SGNHT_Kwargs]
+    ed_config: Optional[EssentialDynamicsConfig]
+    
+    rlct_model_save_dir: Optional[str]
+    rlct_data_dir: Optional[str]
     
 
 class WandBConfig(BaseModel):
     log_to_wandb: bool = Field(default=True, description="Set to false if testing only.")
-    save_model_as_artifact: bool = Field(default=True)
+    save_model_as_artifact: bool = Field(default=True, description="If not true, save model state dict and optimizer locally.")
     wandb_project_name: str = Field(default="devinterp-automata")
+    entity_name: str = Field(default="wu-cindyx", description="Either WandB username or name of team.")
     sweep: bool = Field(default=False, description="Whether to run a sweep.")
     sweep_num: Optional[int] = Field(default=None, description="Number of repeats per sweep.")
     wandb_run_name_suffix: Optional[str] = Field(default=None, description="Additional run name e.g. for temporary or test runs.")
@@ -459,7 +474,7 @@ class MainConfig(BaseModel):
     model_type: ModelType
     
     # Leave class type for task config open and instantiate properly in root validator
-    task_config: dict = Field(default_factory=None)
+    task_config: dict
     
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
     
@@ -468,9 +483,9 @@ class MainConfig(BaseModel):
     optimizer_config: OptimizerConfig = Field(default_factory=OptimizerConfig)
     
     ## Models
-    nano_gpt_config: Optional[NanoGPTConfig] = Field(default=None)
+    nano_gpt_config: Optional[NanoGPTConfig]
     
-    rlct_config: Optional[RLCTConfig] = None
+    rlct_config: Optional[RLCTConfig]
     
     wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     
@@ -480,13 +495,12 @@ class MainConfig(BaseModel):
     num_eval_batches: Optional[int] = Field(default=20)
     loss_threshold: float = Field(default=1e-5)
     # Set by validator
-    run_name: Optional[str] = Field(default=None)
-    is_wandb_enabled: Optional[bool] = Field(default=None)
-    num_epochs: Optional[int] = Field(default=None)
-    eval_frequency: Optional[int] = Field(default=None, decription="Defines number of steps per epoch.")
+    run_name: Optional[str]
+    is_wandb_enabled: Optional[bool]
+    num_epochs: Optional[int]
+    eval_frequency: Optional[int] = Field(default=None, decription="Defines number of steps per epoch. Very important for essential dynamics that is on order of 5000x < training iterations for enough checkpoints.")
     
     model_save_path: str = Field(default="trained_models", description="Root directory to locally save trained models.")
-    save_local: bool = Field(default=False, description="Whether to save as torch object locally.")
     
     @root_validator(pre=True)
     def _set_fields(cls, v: dict):
@@ -497,6 +511,7 @@ class MainConfig(BaseModel):
         Args:
             v (dict): Stores attributes of MainConfig object.
         """
+        assert v["dataset_type"] == v["task_config"]["dataset_type"], "Dataset type must match task config."
         # Instantiate correct class for task config
         config_class = config_class_map[v["dataset_type"]]
         task_config = v["task_config"]
@@ -504,7 +519,8 @@ class MainConfig(BaseModel):
         
         if not v["eval_frequency"]:
             v["eval_frequency"] = task_config["size"]
-        v["run_name"] = f"{v['dataset_type']}_{v['model_type']}"
+        # Note run dataset name matches that in the dataset specific config and loaded up in dataloder
+        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['optimizer_config']['default_lr']}_its{v['num_training_iter']}_layers{v['nano_gpt_config']['n_layers']}"
         v["is_wandb_enabled"] = v["wandb_config"] and v["wandb_config"]["log_to_wandb"]
         v["num_epochs"] = math.ceil(v["num_training_iter"] / v["eval_frequency"])
         
@@ -516,8 +532,16 @@ class MainConfig(BaseModel):
             nano_gpt_config["vocab_size"] = task_config_instance.vocab_size
             nano_gpt_config["output_vocab_size"] = task_config_instance.output_vocab_size
             v["nano_gpt_config"] = nano_gpt_config
-            
+        
+        # Adjust RLCT parameters
+        v["rlct_config"]["sgld_kwargs"]["num_samples"] = v["rlct_config"]["sgnht_kwargs"]["num_samples"] = v["num_training_iter"] * v["dataloader_config"]["train_bs"]
+        if not v["rlct_config"]["use_distill_loss"]:
+            v["rlct_config"]["rlct_data_dir"] = "rlct_data"
+        else:
+            v["rlct_config"]["rlct_data_dir"] = "rlct_data_distill"
+        
         return v
+
 
 config_class_map = {
     "abab": ABABAutomatonConfig,

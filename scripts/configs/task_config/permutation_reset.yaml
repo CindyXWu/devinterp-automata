@@ -1,4 +1,4 @@
-dataset_type: abab
+dataset_type: permutation_reset
 size: 60000
 length: 25
 random_length: false
