@@ -11,7 +11,7 @@ class OnlineWBICEstimator(SamplerCallback):
     Attributes:
         num_draws (int): Number of samples to draw. (should be identical to param passed to sample())
         num_chains (int): Number of chains to run. (should be identical to param passed to sample())
-        n (torch.Tensor): Number of data points, used in the WBIC calculation.
+        n (torch.Tensor): Number of data points seem in LLC estimation training, used in the WBIC calculation.
         device (Union[torch.device, str]): Device to perform computations on, e.g., 'cpu' or 'cuda'.
     """
     def __init__(self, num_chains: int, num_draws: int, n: int, device='cpu'):

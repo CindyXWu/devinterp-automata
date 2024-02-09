@@ -3,8 +3,10 @@ from omegaconf import OmegaConf
 
 from scripts.create_sweep import load_config
 from di_automata.config_setup import MainConfig
-from di_automata.train_utils import Run, update_with_wandb_config
+from di_automata.train_utils import Run, rlct_checkpoints
 from di_automata.config_setup import MainConfig
+
+import torch
 
 # CHANGE THESE  
 config_filename = "main_config"
@@ -33,9 +35,10 @@ def main(config: MainConfig) -> None:
 
     run = Run(omegaconf_config)
     run.train()
-    run.ed_calculation()
     run.finish_run()
-
+    
+    if config.calc_llc_checkpoint:
+        rlct_checkpoints(omegaconf_config)
 
 # def run_sweep():
 #     """Call main function using WandB syntax."""

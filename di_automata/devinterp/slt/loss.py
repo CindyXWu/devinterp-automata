@@ -1,8 +1,8 @@
 import matplotlib.pyplot as plt
 import torch
 
-from devinterp.slt.callback import SamplerCallback
-from devinterp.slt.llc import OnlineLLCEstimator
+from di_automata.devinterp.slt.callback import SamplerCallback
+from di_automata.devinterp.slt.llc import OnlineLLCEstimator
 
 
 class OnlineLossStatistics(SamplerCallback):

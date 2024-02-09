@@ -20,8 +20,6 @@ import numpy as np
 from copy import copy
 from omegaconf import OmegaConf, ListConfig, DictConfig
 
-from di_automata.config_setup import MainConfig
-
 # Check Python version
 import sys
 major, minor = sys.version_info[:2]

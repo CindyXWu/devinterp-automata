@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from plotnine import *
 
 def plot_components(
@@ -15,11 +16,22 @@ def plot_components(
     p = (
         ggplot(df, aes('x', 'y', color='SeqID')) +
         geom_point() +
-        geom_smooth(method='lm', se=False, color='black') + # Add line of best fit, without confidence interval
         scale_color_gradient(low='blue', high='red') +
         facet_wrap('~Comparison', scales='free') + 
         labs(title='Component Comparisons', x='Component Value', y='Component Value') +
         coord_fixed(ratio=1)
     )
     
+    return p
+
+
+def plot_loss_trace(loss: np.ndarray):
+    """Loss trace used to examine chain health."""
+    df = pd.DataFrame(loss).reset_index().melt(id_vars="index", var_name="timestep", value_name="loss")
+    df['timestep'] = df['timestep'].astype(int)
+    
+    p = (
+        ggplot(df, aes(x='timestep', y='loss', color='factor(index)')) +
+        geom_line()
+    )
     return p

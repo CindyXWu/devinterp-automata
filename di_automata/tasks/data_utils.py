@@ -1,14 +1,19 @@
-from di_automata.tasks.automata import AutomatonDataset
 from torch.utils.data import IterableDataset
-from typing import Iterable, TypeVar, Optional, Iterator, Dict
+from typing import Iterable, TypeVar, Optional, Iterator
 T = TypeVar("T")
+
+from di_automata.tasks.automata import AutomatonDataset
+from di_automata.config_setup import MainConfig, config_class_map
 
 
 class TorchDatasetFromIterable(IterableDataset):
-    def __init__(self, task_config: Dict, deterministic: bool):
+    def __init__(self, config: MainConfig, deterministic: bool):
         super(TorchDatasetFromIterable, self).__init__()
+        self.config, task_config = config, config.task_config
         task_config["seed"] = 42 if deterministic else None
         self.automaton_dataset = AutomatonDataset(task_config)
+        config_class = config_class_map[self.config.dataset_type]
+        self.task_config_instance = config_class(**task_config)
         
     def __iter__(self):
         while True:
@@ -20,7 +25,7 @@ class TorchDatasetFromIterable(IterableDataset):
     
     def __len__(self):
         """Define steps per epoch to prevent infinite training."""
-        return self.config.eval_frequency
+        return self.task_config_instance.vocab_size ** self.task_config_instance.length
     
 
 def take_n(i: Iterable[T],  n: Optional[int]) -> Iterator[T]:

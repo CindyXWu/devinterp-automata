@@ -1,9 +1,6 @@
 """Combined dataset.util and data_utils from Bruno's original code."""
-from typing import Union, Iterable, Iterator, Optional, TypeVar, Generator
+from typing import Iterable, Iterator, Optional, TypeVar, Generator
 import torch
-from torch.utils.data import Dataset
-from torchvision.datasets import CIFAR10, MNIST
-from torch.utils.data import DataLoader
 
 from numpy.random import SeedSequence, Generator, default_rng
 

@@ -7,3 +7,6 @@
 # Visual Studio Code
 .vscode/launch.json
 *.json
+
+# Data
+**/rlct_data_distill/

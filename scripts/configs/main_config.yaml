@@ -5,8 +5,11 @@ dataset_type: adder
 model_type: NANO_GPT
 parameterisation: MUP
 
-num_training_iter: 10000
-eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
+calc_llc_train: true
+calc_ed_train: false
+calc_llc_checkpoint: false
+num_training_iter: 20
+eval_frequency: 10 # If not specified then use length of dataset (dataloader length)
 loss_threshold: 0.01
 num_eval_batches: 20
 model_save_path: "trained_models"
@@ -18,12 +21,13 @@ num_epochs: null
 optimizer_config:
   optimizer_type: ADAMW
   default_lr: 3e-3
+  final_lr: 3e-4
   global_lr: 1.0
   optimizer_kwargs: {}
   per_param_lr: {}
   weight_decay: 0
   clip_grad: 1.0 # Change to inf if training is being weird
-  cosine_lr_schedule: false
+  cosine_lr_schedule: true
   
 dataloader_config:
   train_bs: 32
@@ -47,16 +51,16 @@ rlct_config:
   sampling_method: SGLD
   rlct_loss_type: ce
   sigma: 0.25
-  num_chains: 10
+  num_chains: 5
   num_draws: 100
   num_burnin_steps: 0 
   num_steps_bw_draws: 1
   batch_size: 1024
   cores: 1
-  seed:
-    # Default: None. Can be an int or a list of ints.
-    # Example: 1234 or [1234, 5678]
-  pbar: true  # Progress bar
+  seed: null
+
+  use_diagnostics: true
+  online: false
   verbose: true
   return_weights: true
   use_distill_loss: true
@@ -66,14 +70,14 @@ rlct_config:
     lr: 5e-7
     noise_level: 1.0
     weight_decay: 3e-7
-    elasticity: 1.0
+    elasticity: 10.
     temperature: adaptive
-    num_samples: 10000 # Default could also be length of dataset, but here have iterable
+    num_samples: 500 # Default could also be length of dataset, but here have iterable
   sgnht_kwargs:
     lr: 5e-7
     diffusion_factor: 0.01
     bounding_box_size: 0.5
-    num_samples: 10000 # Default could also be length of dataset, but here have iterable
+    num_samples: 500 # Default could also be length of dataset, but here have iterable
   ed_config:
     batches_per_checkpoint: 200
 
@@ -83,8 +87,9 @@ rlct_config:
 wandb_config:
   log_to_wandb: true
   save_model_as_artifact: true
-  wandb_project_name: "devinterp-automata"
+  wandb_project_name: devinterp-automata
   sweep: false
+  entity_name: wu-cindyx
 
 initialisation:
   default_init_scale: 1.0

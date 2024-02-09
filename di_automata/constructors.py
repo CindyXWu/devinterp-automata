@@ -36,7 +36,7 @@ def create_dataloader_hf(config: MainConfig, deterministic: Optional[bool] = Fal
     Note the Automata dataset class automatically handles which instance of which dataclass it is based on the config parameters.
     """
     # Wrap generator with custom IterableDataset which instantiates a new automaton dataset instance per epoch
-    iterable_dataset = TorchDatasetFromIterable(config["task_config"], deterministic)
+    iterable_dataset = TorchDatasetFromIterable(config, deterministic)
     train_loader = DataLoader(iterable_dataset, batch_size=config.dataloader_config.train_bs)
     return train_loader
 
@@ -65,7 +65,26 @@ def construct_model(config: MainConfig) -> tuple[nn.Module, dict[str, InfParam]]
     return model, param_inf_types
 
 
-SchedulerType = Union[torch.optim.lr_scheduler.CosineAnnealingLR, torch.optim.lr_scheduler.StepLR]
+class CustomLRScheduler(object):
+    def __init__(self, optim: torch.optim.Optimizer, num_training_iter: int, base_lr: float, final_lr: float):
+        self.base_lr = base_lr
+        decay_iter = num_training_iter + 1
+        self.lr_schedule = final_lr+0.5*(base_lr-final_lr)*(1+np.cos(np.pi*np.arange(decay_iter)/decay_iter))        
+        self.optimizer = optim
+        self.iter = 0
+        self.current_lr = 0
+
+    def step(self):
+        for param_group in self.optimizer.param_groups:
+            lr = param_group['lr'] = self.lr_schedule[self.iter]
+        self.iter += 1
+        self.current_lr = lr
+
+    def get_lr(self):
+        return self.current_lr
+    
+    
+SchedulerType = Union[torch.optim.lr_scheduler.CosineAnnealingLR, torch.optim.lr_scheduler.StepLR, CustomLRScheduler]
 
 
 def optimizer_constructor(
@@ -138,9 +157,15 @@ def optimizer_constructor(
     )
 
     if config.optimizer_config.cosine_lr_schedule:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optim,
-            T_max=config.num_training_iter,
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        #     optim,
+        #     T_max=config.num_training_iter,
+        # )
+        scheduler = CustomLRScheduler(
+            optim=optim,
+            num_training_iter=config.num_training_iter,
+            base_lr=config.optimizer_config.default_lr,
+            final_lr=config.optimizer_config.final_lr,
         )
     else:
         scheduler = None
@@ -208,28 +233,6 @@ def initialise_model(
         scale_init_inplace(named_params, init_scales)
     else:
         raise ValueError(f"Unknown parameterisation: {config.parameterisation}")
-
-
-SchedulerType = Union[torch.optim.lr_scheduler.CosineAnnealingLR, torch.optim.lr_scheduler.StepLR]
-
-
-class LRScheduler(object):
-    def __init__(self, optimizer, num_epochs, base_lr, final_lr, iter_per_epoch):
-        self.base_lr = base_lr
-        decay_iter = iter_per_epoch * num_epochs
-        self.lr_schedule = final_lr+0.5*(base_lr-final_lr)*(1+np.cos(np.pi*np.arange(decay_iter)/decay_iter))        
-        self.optimizer = optimizer
-        self.iter = 0
-        self.current_lr = 0
-
-    def step(self):
-        for param_group in self.optimizer.param_groups:
-            lr = param_group['lr'] = self.lr_schedule[self.iter]
-        self.iter += 1
-        self.current_lr = lr
-
-    def get_lr(self):
-        return self.current_lr
 
 
 def construct_rlct_criterion(config: MainConfig):

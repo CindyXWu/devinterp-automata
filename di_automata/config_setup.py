@@ -104,6 +104,7 @@ class OptimizerConfig(BaseModel):
     optimizer_type: OptimizerType = Field(default=OptimizerType.ADAM)
     default_lr: float = Field(default=1e-3)
     global_lr: float = Field(default=1.0, description=" Multiplier for all learning rates")
+    final_lr: float = Field(default=1e-4, description="For custom LR scheduler, define final LR.")
     per_param_lr: Optional[dict[str, float]] = Field(default_factory=dict, description="If specified, overrides the default lr with a per-parameter lr")
     optimizer_kwargs: dict[str, Any] = Field(default_factory=dict)
     weight_decay: float = Field(default=0.0)
@@ -111,11 +112,6 @@ class OptimizerConfig(BaseModel):
     cosine_lr_schedule: bool = Field(default=False)
     dropout: float = Field(default=0.0)
     # To do: consider usign EMA as detailed in paper
-    # And do sweep over dropout
-    
-    @property
-    def final_lr(self):
-        return self.default_lr * 0.1 if not self.final_lr else self.final_lr
     
     
 class DataLoaderConfig(BaseModel):
@@ -140,7 +136,7 @@ class DatasetConfig(BaseModel):
     length: int = Field(default=100, description="Paper uses sequence length 100.") 
     random_length: Optional[bool] = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
     seed: Optional[int] = Field(default=None)
-
+    
     @root_validator(pre=True)
     def check_dataset_type(cls, values: dict):
         if not values.get("output_vocab_size"):  # Did not specify the config for this class
@@ -407,6 +403,7 @@ class PermutationResetAutomatonConfig(DatasetConfig):
 
 class RLCTSamplerType(str, Enum):
     SGLD = "SGLD"
+    SGLD_MA = "SGLD_MA"
     SGNHT = "SGNHT"
 
 
@@ -432,24 +429,27 @@ class EssentialDynamicsConfig(BaseModel):
     
 class RLCTConfig(BaseModel):
     rlct_loss_type: RLCTLossType
-    sampling_method: RLCTSamplerType
+    sampling_method: RLCTSamplerType = Field(default=None, description="Value in config only used if the sampler type is not specified when called locally in code. This allows multiple samplers to be used at once.")
     sigma: float
     num_chains: int = Field(default=10)
     num_draws: int = Field(default=100)
     num_burnin_steps: int = Field(default=0, description="Don't think this has been properly implemented yet.")
     num_steps_bw_draws: int = Field(default=1)
+    # Meta
     batch_size: int
     cores: int = Field(default=1)
+    seed: Optional[Union[int, List[int]]] = Field(default=[None], description="Can be int or list of ints. Example: 1234 or [1234, 5678]. Must be same length as number of chains.")
+    # Flags
+    verbose: Optional[bool] = Field(default=True, description="Set to False to disable tqdm in sampler.")
+    online: bool = Field(default=False)
     use_distill_loss: bool
+    use_diagnostics: bool = Field(default=True, description="Whether to include norm, WBIC, gradient and loss diagnostics for RLCT estimation.")
     save_results: bool
-    seed: Optional[Union[int, List[int]]]
-    verbose: Optional[bool] = Field(default=True)
-    return_weights: Optional[bool] = Field(default=True)
-    
+    # Other configs
     sgld_kwargs: Optional[SGLD_Kwargs]
     sgnht_kwargs: Optional[SGNHT_Kwargs]
     ed_config: Optional[EssentialDynamicsConfig]
-    
+    # Saving
     rlct_model_save_dir: Optional[str]
     rlct_data_dir: Optional[str]
     
@@ -490,6 +490,9 @@ class MainConfig(BaseModel):
     wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     
     ## Training bits and bobs
+    calc_llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
+    calc_llc_checkpoint: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
+    calc_ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
     num_eval_batches: Optional[int] = Field(default=20)
@@ -520,7 +523,7 @@ class MainConfig(BaseModel):
         if not v["eval_frequency"]:
             v["eval_frequency"] = task_config["size"]
         # Note run dataset name matches that in the dataset specific config and loaded up in dataloder
-        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['optimizer_config']['default_lr']}_its{v['num_training_iter']}_layers{v['nano_gpt_config']['n_layers']}"
+        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['optimizer_config']['default_lr']}_its{v['num_training_iter']}_layers{v['nano_gpt_config']['n_layers']}_seqlen{task_config['length']}"
         v["is_wandb_enabled"] = v["wandb_config"] and v["wandb_config"]["log_to_wandb"]
         v["num_epochs"] = math.ceil(v["num_training_iter"] / v["eval_frequency"])
         

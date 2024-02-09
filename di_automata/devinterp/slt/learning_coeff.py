@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Literal, Optional, Type, Union
+from typing import Callable, Dict, Literal, Optional, Type, Union, List, OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -8,7 +8,13 @@ from torch.utils.data import DataLoader
 from di_automata.config_setup import MainConfig
 from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.slt.callback import SamplerCallback
+from di_automata.devinterp.slt.wbic import OnlineWBICEstimator
+from di_automata.devinterp.slt.norms import WeightNorm, GradientNorm, NoiseNorm
+from di_automata.devinterp.slt.gradient import GradientDistribution
+from di_automata.devinterp.slt.trace import OnlineTraceStatistics
+from di_automata.devinterp.slt.loss import OnlineLossStatistics
 from di_automata.devinterp.slt.sampler import sample
+from di_automata.devinterp.slt.callback import validate_callbacks
 
 
 class LLCEstimator(SamplerCallback):
@@ -59,6 +65,7 @@ class LLCEstimator(SamplerCallback):
         }
     
     def __call__(self, chain: int, draw: int, loss: float):
+        """Pythonic: allow class member to behave as function."""
         self.update(chain, draw, loss)
         
 
@@ -103,18 +110,85 @@ class OnlineLLCEstimator(SamplerCallback):
                     (t - 1) * prev_llc + (self.n / self.n.log()) * (loss - init_loss)
                 )
 
+    @property
+    def init_loss(self):
+        return self.losses[:, 0].mean()
+
+    def finalize(self):
+        self.llc_means = self.llcs.mean(dim=0)
+        self.llc_stds = self.llcs.std(dim=0)
+
+    def sample(self):
+        return {
+            "llc/means": self.llc_means.cpu().numpy(),
+            "llc/stds": self.llc_stds.cpu().numpy(),
+            "llc/trace": self.llcs.cpu().numpy(),
+            "loss/trace": self.losses.cpu().numpy()
+        }
+    
+    def __call__(self, chain: int, draw: int, loss: float):
+        self.update(chain, draw, loss)
+        
+        
+def estimate_learning_coeff_with_summary(
+    loader: DataLoader,
+    criterion: Callable,
+    main_config: MainConfig,
+    checkpoint: OrderedDict,
+    sampling_method: Type[torch.optim.Optimizer] = SGLD,
+    device: torch.device = torch.device("cpu"),
+    optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
+) -> dict:
+    config = main_config.rlct_config
+    num_chains, num_draws, num_samples, device = [config.num_chains, config.num_draws, optimizer_kwargs.num_samples, device]
+    arg_list = [num_chains, num_draws, num_samples, device]
+    if optimizer_kwargs is None: # If not specified at run-time (e.g. where you want multiple types run at once) then use config
+        match config.sampling_method:
+            case "SGLD" | "SGLD_MA": optimizer_kwargs = config.sgld_kwargs
+            case "SGNHT": optimizer_kwargs = config.sgnht_kwargs
+        
+    llc_estimator = OnlineLLCEstimator(config.num_chains, config.num_draws, optimizer_kwargs.num_samples, device=device) if config.online else LLCEstimator(*arg_list)
+    
+    if config.use_diagnostics:
+        callbacks = [
+            OnlineWBICEstimator(*arg_list),
+            WeightNorm(num_chains, num_draws, device, p_norm=2),
+            GradientNorm(num_chains, num_draws, device, p_norm=2),
+            # GradientDistribution(num_chains, num_draws, device=device),
+        ]
+    callbacks = [llc_estimator, *callbacks]
+    validate_callbacks(callbacks)
+    
+    sample(
+        loader=loader,
+        criterion=criterion,
+        main_config=main_config,
+        checkpoint=checkpoint,
+        sampling_method=sampling_method,
+        optimizer_kwargs=optimizer_kwargs,
+        device=device,
+        callbacks=callbacks,
+    )
+
+    results = {}
+    for callback in callbacks:
+        if hasattr(callback, "sample"):
+            results.update(callback.sample())
+
+    return results
 
 
 def estimate_learning_coeff(
     loader: DataLoader,
     criterion: Callable,
     main_config: MainConfig,
+    checkpoint: OrderedDict,
     sampling_method: Type[torch.optim.Optimizer] = SGLD,
-    checkpoint: Optional[dict] = None,
     optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
     device: torch.device = torch.device("cpu"),
+    callbacks: List[Callable] = [],
 ) -> float:
-    trace = sample(
+    return estimate_learning_coeff_with_summary(
         loader=loader,
         criterion=criterion,
         main_config=main_config,
@@ -122,55 +196,10 @@ def estimate_learning_coeff(
         sampling_method=sampling_method,
         optimizer_kwargs=optimizer_kwargs,
         device=device,
-    )
-    baseline_loss = trace.loc[trace["chain"] == 0, "loss"].iloc[0]
-    avg_loss = trace.groupby("chain")["loss"].mean().mean()
-    num_samples = optimizer_kwargs["num_samples"]
-
-    return (avg_loss - baseline_loss) * num_samples / np.log(num_samples)
-
-
-def estimate_learning_coeff_with_summary(
-    loader: DataLoader,
-    criterion: Callable,
-    main_config: MainConfig,
-    checkpoint: Optional[dict] = None,
-    sampling_method: Type[torch.optim.Optimizer] = SGLD,
-    optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
-    device: torch.device = torch.device("cpu"),
-) -> dict:
-    trace = sample(
-        loader=loader,
-        criterion=criterion,
-        main_config=main_config,
-        checkpoint=checkpoint,
-        sampling_method=sampling_method,
-        optimizer_kwargs=optimizer_kwargs,
-        device=device,
-    )
-
-    num_chains = main_config.rlct_config.num_chains
+        callbacks=callbacks,
+    )["llc/mean"]
     
-    baseline_loss = trace.loc[trace["chain"] == 0, "loss"].iloc[0]
-    num_samples = optimizer_kwargs["num_samples"]
-    avg_losses = trace.groupby("chain")["loss"].mean()
-    results = torch.zeros(num_chains, device=device)
-
-    for i in range(num_chains):
-        chain_avg_loss = avg_losses.iloc[i]
-        results[i] = (chain_avg_loss - baseline_loss) * num_samples / np.log(num_samples)
-
-    avg_loss = results.mean()
-    std_loss = results.std()
-
-    return {
-        "mean": avg_loss.item(),
-        "std": std_loss.item(),
-        **{f"chain_{i}": results[i].item() for i in range(num_chains)},
-        "trace": trace,
-    }
-
-
+    
 def plot_learning_coeff_trace(trace: pd.DataFrame, **kwargs):
     import matplotlib.pyplot as plt
 

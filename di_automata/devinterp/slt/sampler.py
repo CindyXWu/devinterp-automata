@@ -1,14 +1,10 @@
-from typing import Callable, Dict, List, Literal, Optional, Type, Union
+from typing import Callable, Dict, List, Literal, Optional, Type, Union, OrderedDict
 import itertools
 import inspect
 import warnings
-from copy import deepcopy
 from tqdm import tqdm
-import numpy as np
-import pandas as pd
 
 import torch
-from torch import nn
 from torch.multiprocessing import cpu_count, get_context
 from torch.utils.data import DataLoader, IterableDataset
 
@@ -19,11 +15,11 @@ from di_automata.devinterp.optim.sgld_ma import SGLD_MA
 from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.constructors import construct_model
 from di_automata.losses import predictive_kl_loss
-from di_automata.devinterp.slt.callback import validate_callbacks, SamplerCallback
+from di_automata.devinterp.slt.callback import SamplerCallback
 
 
 def call_with(func: Callable, **kwargs):
-    """Check the func annotation and call with only the necessary kwargs."""
+    """Check the func annotation and call with only the necetask_config.lengthask_config.lengthsary kwargs."""
     sig = inspect.signature(func)
     
     # Filter out the kwargs that are not in the function's signature
@@ -38,11 +34,10 @@ def sample_single_chain(
     criterion: Callable,
     sampling_method: Type[torch.optim.Optimizer],
     main_config: MainConfig,
-    checkpoint: dict,
-    num_iter: int,
+    checkpoint: OrderedDict,
     chain: int = 0,
+    seed = None,
     optimizer_kwargs: Optional[Dict] = None,
-    seed: Optional[int] = None,
     device: torch.device = torch.device("cpu"),
     callbacks: List[SamplerCallback] = [],
 ):
@@ -51,56 +46,54 @@ def sample_single_chain(
     In my code as deep copy has issues with MUP, I am just instantiating a new model and state dict.
 
     Args:
-        ref_model: Currently unused. Instead instantiate a new model class based on config and load state dict.
-        use_distil_loss: Whether to use distillation loss. I introduced this as a correction for negative lambda hat estimates.
+        loader: Iterable infinite dataloader. Original devinterp code wraps it as an iterable.
+        criterion: KL or distillation loss.
+        sampling_method: SGLD, SGNHT, or SGLD_MA class. Passed in separately to allow for multiple sampling types to be called in the same run.
+        checkpoint: Model state dict. Note original Timaeus code used deepcopy and passing in of current model, but deepcopy is not great for entire models.
+        Optimizer_kwargs: Also passed in separately to config to allow for multiple sampling types to be called in the same run.
+        use_distill_loss: Whether to use distillation loss. I introduced this as a correction for negative lambda hat estimates.
         This modifies the loss landscape to be a local minimum, allowing RLCT estimations early on in training.
+        callbacks: Important for storing and returning sample results.
     """
     config: RLCTConfig = main_config.rlct_config
+    
+    if seed is not None:
+        torch.manual_seed(seed)
     
     if config.num_burnin_steps:
         warnings.warn('Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.')
     if config.num_draws > len(loader):
         warnings.warn('You are taking more sample batches than there are dataloader batches available, this removes some randomness from sampling but is probably fine. (All sample batches beyond the number dataloader batches are cycled from the start, f.e. 9 samples from [A, B, C] would be [B, A, C, B, A, C, B, A, C].)')
     
-    # Note original Timaeus code used deepcopy and passing in of current model
     model, _ = construct_model(main_config)
-    model.load_state_dict(checkpoint["state dict"])
+    model.load_state_dict(checkpoint)
     model = model.to(device)
     model.train()
 
-    optimizer = sampling_method(model.parameters(), **(optimizer_kwargs or {}))
-
-    if seed is not None:
-        torch.manual_seed(seed)
-
-    num_steps = config.num_draws * config.num_steps_bw_draws + config.num_burnin_steps
-
-    local_draws = pd.DataFrame(
-        index=range(config.num_draws),
-        columns=["chain", "step", "loss"] + (["model_weights"] if config.return_weights else []),
-    )
-
-    iterator = loader if isinstance(loader, IterableDataset) else zip(range(num_steps), itertools.cycle(loader))
-    
     if config.use_distill_loss:
         baseline_model, _ = construct_model(main_config)
-        baseline_model.load_state_dict(checkpoint["state dict"])
+        baseline_model.load_state_dict(checkpoint)
         baseline_model = baseline_model.to(device)
         baseline_model.eval()
-
-    for i, data in enumerate(take_n(iterator, num_iter)): # TODO: ADD TQDM
         
+    optimizer = sampling_method(model.parameters(), **(optimizer_kwargs or {}))
+
+    num_steps = config.num_draws * config.num_steps_bw_draws + config.num_burnin_steps
+    iterator = loader if isinstance(loader.dataset, IterableDataset) else itertools.cycle(loader)
+    progress_bar = tqdm(total=num_steps, disable=not config.verbose)
+
+    for (i, data) in enumerate(take_n(iterator, num_steps)):
         inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
         logits = model(inputs)
         
         def closure(backward=True):
             """
-            Compute loss for the current state of the model and update the gradients.
+            Compute loss for current state of model and update gradients.
             
             Args:
                 backward: Whether to perform backward pass. Only used for updating weight grad at proposed location. See SGLD_MA.step() for more details.
             """
-            outputs = model(xs)
+            outputs = model(inputs)
             loss = criterion(outputs, logits)
             if backward:
                 optimizer.zero_grad() 
@@ -127,8 +120,9 @@ def sample_single_chain(
             with torch.no_grad():
                 for callback in callbacks:
                     call_with(callback, **locals())  # Cursed. This is the way. 
-
-    return local_draws
+        
+        progress_bar.update()
+        progress_bar.set_description(f"Chain {chain}, sampler {config.sampling_method}")
 
 
 def _sample_single_chain(kwargs):
@@ -139,7 +133,7 @@ def sample(
     loader: DataLoader,
     criterion: Callable,
     main_config: MainConfig,
-    checkpoint: dict,
+    checkpoint: OrderedDict,
     sampling_method: Type[torch.optim.Optimizer] = SGLD,
     optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
     device: torch.device = torch.device("cpu"),
@@ -188,12 +182,13 @@ def sample(
             sampling_method=sampling_method,
             optimizer_kwargs=optimizer_kwargs,
             device=device,
+            callbacks=callbacks,
         )
     
     if main_config.rlct_config.cores > 1:
         ctx = get_context("spawn")
         with ctx.Pool(cores) as pool:
-            results = pool.map(_sample_single_chain, [get_args(i) for i in range(num_chains)])
+            pool.map(_sample_single_chain, [get_args(i) for i in range(num_chains)])
     else:
         for i in range(num_chains):
             _sample_single_chain(get_args(i))
