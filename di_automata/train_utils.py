@@ -6,6 +6,7 @@ from tqdm import tqdm
 import wandb
 import logging
 import os
+import gc
 import shutil
 from einops import rearrange
 import subprocess
@@ -13,6 +14,7 @@ from omegaconf import OmegaConf
 from functools import partial
 from sklearn.decomposition import PCA
 import pandas as pd
+import time
 import json
 
 import torch
@@ -155,6 +157,7 @@ class Run:
         logit_artifact = wandb.Artifact(f"logits", type="logits", description="The trained model state_dict")
         logit_artifact.add_file("logits", name="config.yaml")
         wandb.log_artifact(logit_artifact, aliases=[f"epoch{self.epoch}_{self.config.run_name}"])
+        os.remove("logits")
         
         
     def _ed_calculation(self) -> None:
@@ -164,7 +167,7 @@ class Run:
         pca.fit(concat_logit_matrix.cpu().numpy())
         
         projected_1, projected_2, projected_3 = [], [], []
-        for epoch in range(self.config.num_epochs):
+        for epoch in range(self.config.num_epochs - 1):
             logits_epoch = rearrange(self.ed_logits[epoch], 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
             projected_1.append(projected_vector[0])
@@ -313,9 +316,14 @@ class Run:
             self.save_rlct()
         if self.config.is_wandb_enabled:
             wandb.finish()
+            
+        # Delete items
         shutil.rmtree('wandb')
-
-
+        del variables
+        gc.collect()
+        torch.cuda.empty_cache()
+    
+    
 def extract_and_save_rlct_data(
     data: dict, 
     callback_names: list[str], 

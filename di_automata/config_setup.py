@@ -402,7 +402,7 @@ class SGNHT_Kwargs(BaseModel):
 
 class SGLD_Kwargs(BaseModel):
     lr: float
-    noise_level: float
+    noise_level: float = Field(default=1.0, description="Standard deviation for Gaussian noise added in SGLD.")
     weight_decay: float = Field(default=1e-6, description="Something like [1e-5, 1e-6, 1e-7].")
     elasticity: float = Field(default=1.0, description="Something like [1, 10, 100].")
     bounding_box_size: float = Field(default=None, description="If set, prevents LLC estimator chain from wandering too far.")
