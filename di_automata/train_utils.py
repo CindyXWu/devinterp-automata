@@ -6,6 +6,7 @@ from tqdm import tqdm
 import wandb
 import logging
 import os
+import shutil
 from einops import rearrange
 import subprocess
 from omegaconf import OmegaConf
@@ -75,9 +76,6 @@ class Run:
         # self.model = torch.compile(self.model) # Not supported for Windows. Bill Gates computer.
         
         self.optimizer, self.scheduler = optimizer_constructor(config, self.model, param_inf_properties)
-        
-        self.model_save_dir = Path(self.config.model_save_path)
-        self.model_save_dir.mkdir(parents=True, exist_ok=True)
 
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
@@ -289,6 +287,7 @@ class Run:
                 file.write(OmegaConf.to_yaml(self.config)) # Necessary: Hydra automatic config file does not include Pydantic run-time attributes and wrong thing will be logged and cause a nasty bug
             model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
             wandb.log_artifact(model_artifact, aliases=[f"epoch{self.epoch}_{self.config.run_name}"])
+            os.remove("states.torch") # Delete file to prevent clogging up
         else:
             file_path =  self.model_save_dir / f"{self.config.run_name}"
             data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
@@ -307,13 +306,14 @@ class Run:
     
     
     def finish_run(self):
-        """Clean up last RLCT calculation bits and bobs, save data, and finish WandB run."""
+        """Clean up last RLCT calculation, save data, finish WandB run and delete large temporary folders."""
         if self.config.calc_ed_train: 
             self._ed_calculation()
         if self.config.calc_llc_train:
             self.save_rlct()
         if self.config.is_wandb_enabled:
             wandb.finish()
+        shutil.rmtree('wandb')
 
 
 def extract_and_save_rlct_data(
@@ -333,6 +333,10 @@ def extract_and_save_rlct_data(
     loss_p.save(loss_filename, width=10, height=4, dpi=300)
     log_dict[f"{sampler_type}/loss"] = wandb.Image(loss_filename)
     
+    weight_norm_filename = "weight_norm.png"
+    noise_norm_filename = "noise_norm.png"
+    gradient_norm_filename = "gradient_norm.png"
+    
     if 'OnlineWBCEstimator' in callback_names:
         log_dict[f"{sampler_type}/wbic/means"] = data["wbic/means"]
         log_dict[f"{sampler_type}/wbic/stds"] = data["wbic/stds"]
@@ -342,21 +346,18 @@ def extract_and_save_rlct_data(
     if 'WeightNorm' in callback_names:
         weight_norm_p = plot_trace(data["weight_norm/trace"], "weight norm")
         return_dict[f"{sampler_type}/weight_norm/mean"] = data["weight_norm/trace"].mean().item()
-        weight_norm_filename = "weight_norm.png"
         weight_norm_p.save(weight_norm_filename, width=10, height=4, dpi=300)
         log_dict["weight_norm"] = wandb.Image(weight_norm_filename)
     
     if 'NoiseNorm' in callback_names:
         noise_norm_p = plot_trace(data["noise_norm/trace"], "noise norm")
         return_dict[f"{sampler_type}/noise_norm/mean"] = data["noise_norm/trace"].mean().item()
-        noise_norm_filename = "noise_norm.png"
         noise_norm_p.save(noise_norm_filename, width=10, height=4, dpi=300)
         log_dict["noise_norm"] = wandb.Image(noise_norm_filename)
     
     if 'GradientNorm' in callback_names:
         gradient_norm_p = plot_trace(data["gradient_norm/trace"], "gradient norm")
         return_dict[f"{sampler_type}/gradient_norm/mean"] = data["gradient_norm/trace"].mean().item()
-        gradient_norm_filename = "gradient_norm.png"
         gradient_norm_p.save(gradient_norm_filename, width=10, height=4, dpi=300)
         log_dict["gradient_norm"] = wandb.Image(gradient_norm_filename)
     
@@ -364,7 +365,15 @@ def extract_and_save_rlct_data(
     
     wandb.log(log_dict, step=idx)
     
+    for filename in [weight_norm_filename, gradient_norm_filename, noise_norm_filename]:
+        delete_file(filename)
+    
     return return_dict
+
+
+def delete_file(filename: str):
+    if os.path.exists(filename):
+        os.remove(filename)
     
     
 def rlct_checkpoints(config: MainConfig) -> None:
@@ -451,7 +460,6 @@ def evaluate(
 
     for data in take_n(data_loader, num_eval_batches):
         inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
-        visualise_seq_data(inputs, idx)
         outputs = model(inputs)
         
         total_loss += F.cross_entropy(outputs, labels.long())

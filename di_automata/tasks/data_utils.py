@@ -27,7 +27,7 @@ class TorchDatasetFromIterable(IterableDataset):
     
     def __len__(self):
         """Unique samples in dataloader."""
-        return self.task_config_instance.vocab_size ** self.task_config_instance.length
+        return self.config.num_epochs * self.config.dataloader_config.train_bs * self.config.eval_frequency
     
 
 def take_n(i: Iterable[T],  n: Optional[int]) -> Iterator[T]:

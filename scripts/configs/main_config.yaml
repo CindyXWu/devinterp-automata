@@ -12,7 +12,6 @@ num_training_iter: 200
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
 loss_threshold: 0.01
 num_eval_batches: 20
-model_save_path: "trained_models"
 save_local: false # Probably change if running on cloud
 run_name: null
 is_wandb_enabled: false
