@@ -105,6 +105,7 @@ class Run:
             
             for data in take_n(self.train_loader, self.num_iter): # Compatible with HF dataset format where data is a dictionary
                 # all_idxs is a list of idxs (not useful)
+                iter_model_saved = False
                 self.idx += 1
                 inputs, labels = data["input_ids"].to(self.device), data["label_ids"].to(self.device)
                 logits = self.model(inputs)
@@ -119,17 +120,21 @@ class Run:
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
+                if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
+                    self._ed_data_training()
+                    self._save_model() # Save model but do not log other metrics at this frequency
+                    iter_model_saved = True
+                
             train_loss, train_acc = self._evaluation_step()
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
 
-            if self.config.calc_ed_train: self._ed_data_training()
             if self.config.calc_llc_train: self._rlct_training()
             
             if train_loss < self.config.loss_threshold:
                 print(f'Average training loss {train_loss:.3f} is below the threshold {self.config.loss_threshold}. Training stopped.')
                 break
 
-            self._save_model()
+            if not iter_model_saved: self._save_model()
         
     
     def _ed_data_training(self) -> None:

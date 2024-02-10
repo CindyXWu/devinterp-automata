@@ -396,21 +396,23 @@ class RLCTSamplerType(str, Enum):
 class SGNHT_Kwargs(BaseModel):
     lr: float
     diffusion_factor: float
-    bounding_box_size: float
+    bounding_box_size: float = Field(default=None, description="If set, prevents LLC estimator chain from wandering too far.")
     num_samples: int
 
 
 class SGLD_Kwargs(BaseModel):
     lr: float
     noise_level: float
-    weight_decay: float
-    elasticity: float
-    temperature: str
+    weight_decay: float = Field(default=1e-6, description="Something like [1e-5, 1e-6, 1e-7].")
+    elasticity: float = Field(default=1.0, description="Something like [1, 10, 100].")
+    bounding_box_size: float = Field(default=None, description="If set, prevents LLC estimator chain from wandering too far.")
+    temperature: str = Field(default="adaptive", description="If adaptive, calculate temperature using number of samples seen, given by num_samples.")
     num_samples: int
 
 
 class EssentialDynamicsConfig(BaseModel):
-    batches_per_checkpoint: int
+    batches_per_checkpoint: int = Field(default=500, description="Number of batches in fixed dataset subset to get essential dynamics logits from.")
+    eval_frequency: int = Field(default=10, description="Essential dynamics evaluation occurs more often than other metric logging.")
     
     
 class RLCTConfig(BaseModel):
@@ -422,20 +424,24 @@ class RLCTConfig(BaseModel):
     num_samples: int = Field(default=None, description="Total unique samples seen during RLCT sampling = min(unique datapoints in dataset as defined by task config, datapoints seen based on num_draws and num steps bw draws). Set by root validator.")
     num_burnin_steps: int = Field(default=0, description="NOT IMPLEMENTED YET.")
     num_steps_bw_draws: int = Field(default=1)
+    
     # Meta
     batch_size: int
     cores: int = Field(default=1)
     seed: Optional[Union[int, List[int]]] = Field(default=[None], description="Can be int or list of ints. Example: 1234 or [1234, 5678]. Must be same length as number of chains.")
+    
     # Flags
     verbose: Optional[bool] = Field(default=True, description="Set to False to disable tqdm in sampler.")
     online: bool = Field(default=False)
     use_distill_loss: bool
     use_diagnostics: bool = Field(default=True, description="Whether to include norm, WBIC, gradient and loss diagnostics for RLCT estimation.")
     save_results: bool
+    
     # Other configs
     sgld_kwargs: Optional[SGLD_Kwargs]
     sgnht_kwargs: Optional[SGNHT_Kwargs]
     ed_config: Optional[EssentialDynamicsConfig]
+    
     # Saving
     rlct_model_save_dir: Optional[str]
     rlct_data_dir: Optional[str]
@@ -461,18 +467,14 @@ class MainConfig(BaseModel):
     
     # Leave class type for task config open and instantiate properly in root validator
     task_config: dict
-    
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
-    
     initialisation: InitialisationConfig = Field(default_factory=InitialisationConfig)
-    
     optimizer_config: OptimizerConfig = Field(default_factory=OptimizerConfig)
     
     ## Models
     nano_gpt_config: Optional[NanoGPTConfig]
     
     rlct_config: Optional[RLCTConfig]
-    
     wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     
     ## Training bits and bobs
@@ -483,13 +485,12 @@ class MainConfig(BaseModel):
     num_training_iter: int = Field(default=10000)
     num_eval_batches: Optional[int] = Field(default=20)
     loss_threshold: float = Field(default=1e-5)
+    
     # Set by validator
     run_name: Optional[str]
     is_wandb_enabled: Optional[bool]
     num_epochs: Optional[int]
     eval_frequency: Optional[int] = Field(default=None, decription="Defines number of steps per epoch. Very important for essential dynamics that is on order of 5000x < training iterations for enough checkpoints.")
-    
-    model_save_path: str = Field(default="trained_models", description="Root directory to locally save trained models.")
     
     @root_validator(pre=True)
     def _set_fields(cls, v: dict):

@@ -5,11 +5,11 @@ model_type: NANO_GPT
 parameterisation: MUP
 
 calc_llc_train: true
-calc_ed_train: false
-calc_llc_checkpoint: true
+calc_ed_train: true
+calc_llc_checkpoint: false
 
-num_training_iter: 20
-eval_frequency: 10 # If not specified then use length of dataset (dataloader length)
+num_training_iter: 200
+eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
 loss_threshold: 0.01
 num_eval_batches: 20
 model_save_path: "trained_models"
@@ -52,7 +52,7 @@ rlct_config:
   rlct_loss_type: ce # When not using distill kl loss
   sigma: 0.25
   num_samples: null # Set by validator
-  num_chains: 1
+  num_chains: 3
   num_draws: 100
   num_burnin_steps: 0 
   num_steps_bw_draws: 1
@@ -82,6 +82,7 @@ rlct_config:
     num_samples: 1 # True value set at run-time. This default value will throw an error in main code.
   ed_config:
     batches_per_checkpoint: 200
+    eval_frequency: 10
 
   rlct_model_save_dir: null
   rlct_data_dir: null
