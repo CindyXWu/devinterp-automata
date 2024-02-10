@@ -3,7 +3,6 @@ from typing import Literal, Union
 import numpy as np
 import torch
 
-
 class SGLD(torch.optim.Optimizer):
     r"""
     Implements Stochastic Gradient Langevin Dynamics (SGLD) optimizer.
@@ -75,6 +74,8 @@ class SGLD(torch.optim.Optimizer):
         )
         super(SGLD, self).__init__(params, defaults)
 
+        assert num_samples > 1, "Num_samples must be > 1"
+        
         # Save the initial parameters if the elasticity term is set
         for group in self.param_groups:
             if group["elasticity"] != 0 or group["bounding_box_size"] != 0:
@@ -92,6 +93,8 @@ class SGLD(torch.optim.Optimizer):
                 param_state = self.state[p]
                 dw = p.grad.data * group["num_samples"] / group["temperature"]
 
+                assert not torch.isnan(dw).any(), "Grads blown up to infinity"
+                
                 if group["weight_decay"] != 0:
                     dw.add_(p.data, alpha=group["weight_decay"])
 
@@ -102,10 +105,10 @@ class SGLD(torch.optim.Optimizer):
                 p.data.add_(dw, alpha=-0.5 * group["lr"])
 
                 # Add Gaussian noise
-                noise = torch.normal(
+                self.noise = torch.normal(
                     mean=0.0, std=group["noise_level"], size=dw.size(), device=dw.device
                 )
-                p.data.add_(noise, alpha=group["lr"] ** 0.5)
+                p.data.add_(self.noise, alpha=group["lr"] ** 0.5)
                 # Rebound if exceeded bounding box size
                 if group["bounding_box_size"]:
                     torch.clamp_(

@@ -6,7 +6,7 @@ from tqdm import tqdm
 import wandb
 import logging
 import os
-from einops import rearrange, reduce, repeat
+from einops import rearrange
 import subprocess
 from omegaconf import OmegaConf
 from functools import partial
@@ -22,8 +22,11 @@ from torch.utils.data import DataLoader
 from di_automata.plotting.plot_utils import visualise_seq_data
 from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.optim.sgnht import SGNHT
-from di_automata.devinterp.slt import estimate_learning_coeff_with_summary
-from di_automata.devinterp.rlct_utils import plot_components, plot_loss_trace
+from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
+from di_automata.devinterp.rlct_utils import (
+    plot_components,
+    plot_trace,
+)
 from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import *
 from di_automata.constructors import (
@@ -75,9 +78,8 @@ class Run:
         
         self.model_save_dir = Path(self.config.model_save_path)
         self.model_save_dir.mkdir(parents=True, exist_ok=True)
-        
-        columns = ['sgld', 'sgnht', 'sgld_loss', 'sgld_std', 'sgnht_std', 'sgnht_loss']
-        self.rlct_df = pd.DataFrame(columns=columns)
+
+        self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
         self.rlct_folder.mkdir(parents=True, exist_ok=True)
         self.rlct_criterion = construct_rlct_criterion(self.config)
@@ -111,9 +113,9 @@ class Run:
                 loss = criterion(logits, labels.long())
                 loss.backward()
                 self.optimizer.step()
-                if self.scheduler:
+                if self.scheduler: # Code baked in for CustomLRScheduler instance for now 
                     self.scheduler.step()
-                    self.lr = self.scheduler.get_last_lr()[0]
+                    self.lr = self.scheduler.current_lr
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
@@ -179,7 +181,7 @@ class Run:
         """
         # Use for initialising new model in sample function for LLC
         checkpoint = self.model.state_dict()
-        
+            
         rlct_func = partial(
             estimate_learning_coeff_with_summary,
             loader=self.train_loader,
@@ -188,40 +190,23 @@ class Run:
             checkpoint=checkpoint,
             device=self.device,
         )
-
-        sgld_results_dict = rlct_func(sampling_method=SGLD, optimizer_kwargs=self.config.rlct_config.sgld_kwargs)
-        sgld_mean, sgld_std, sgld_loss = sgld_results_dict["llc/mean"], sgld_results_dict["llc/std"], sgld_results_dict["loss/trace"]
-        sgld_p = plot_loss_trace(sgld_loss)
-        sgld_p.save("sgld_loss.png", width=10, height=4, dpi=300)
         
-        # sgnht_results_dict = rlct_func(sampling_method=SGNHT, optimizer_kwargs=self.config.rlct_config.sgnht_kwargs)
-        # sgnht_mean, sgnht_std, sgnht_loss = sgnht_results_dict["llc/mean"], sgnht_results_dict["llc/std"], sgnht_results_dict["loss/trace"]
-        # sgnht_p = plot_loss_trace(sgnht_loss)
-        # sgnht_p.save("sgnht_loss.png", width=10, height=4, dpi=300)
+        sgld_results, callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=self.config.rlct_config.sgld_kwargs)
+        sgnht_results, callback_names = rlct_func(sampling_method=SGNHT, optimizer_kwargs=self.config.rlct_config.sgnht_kwargs)
         
-        wandb.log({
-            "rlct_sgld.mean": sgld_mean, 
-            "rlct_sgld.std": sgld_std, 
-            "rlct_sgld.loss": wandb.Image("sgld_loss.png"),
-            # "rlct_sgnht.mean": sgnht_mean, 
-            # "rlct_sgnht.std": sgnht_std,
-            # "rlct_sgnht.loss": wandb.Image("sgnht_loss.png"),
-            },
-            step=self.idx
-        )
-
-        new_row = {
-            'sgld': sgld_mean,
-            'sgld_std': sgld_std,
-            # 'sgnht': sgnht_mean,
-            # 'sgnht_std': sgnht_std,
-        }
-        self.rlct_df = self.rlct_df._append(new_row, ignore_index=True)
-    
+        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, callback_names, sampler_type="slgd", idx=self.idx)
+        sgnht_results_filtered = extract_and_save_rlct_data(sgnht_results, callback_names, sampler_type="sgnht", idx=self.idx)
+        combined_results = sgld_results_filtered | sgnht_results_filtered
+        self.rlct_data_list.append(combined_results)
+        
     
     def save_rlct(self) -> None:
-        self.rlct_df.to_csv(self.rlct_folder / f"{self.config.run_name}.csv")
-            
+        rlct_df = pd.DataFrame(self.rlct_data_list)
+        rlct_df.to_csv(self.rlct_folder / f"{self.config.run_name}.csv")
+        rlct_artifact = wandb.Artifact(f"rlct_distill_{self.config.rlct_config.use_distill_loss}", type="rlct", description="RLCT mean and std for all samplers used.")
+        rlct_artifact.add_file(self.rlct_folder / f"{self.config.run_name}.csv")
+        wandb.log_artifact(rlct_artifact, aliases=[f"rlct_distill_{self.config.rlct_config.use_distill_loss}"])
+                
             
     def restore_model(self, resume_training: bool = False) -> None:
         """Restore from a checkpoint on wandb. 
@@ -262,7 +247,7 @@ class Run:
         }
         self.run = wandb.init(**logger_params, entity="wu-cindyx")
         # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
-        wandb.config.dataset_type = self.config.dataset_type
+        wandb.config.dataset_type = self.config.task_config.dataset_type
         wandb.config.model_type = self.config.model_type
     
     
@@ -324,6 +309,57 @@ class Run:
             self.save_rlct()
         if self.config.is_wandb_enabled:
             wandb.finish()
+
+
+def extract_and_save_rlct_data(
+    data: dict, 
+    callback_names: list[str], 
+    sampler_type: str, 
+    idx: int
+) -> dict:
+    log_dict = {}
+    return_dict = {}
+    # Always log mean and std
+    log_dict[f"{sampler_type}/mean"] = return_dict[f"{sampler_type}/mean"] = data["llc/mean"]
+    log_dict[f"{sampler_type}/std"] = return_dict[f"{sampler_type}/std"] = data["llc/std"]
+    
+    loss_p = plot_trace(data["loss/trace"], "loss")
+    loss_filename = f"{sampler_type}_loss.png"
+    loss_p.save(loss_filename, width=10, height=4, dpi=300)
+    log_dict[f"{sampler_type}/loss"] = wandb.Image(loss_filename)
+    
+    if 'OnlineWBCEstimator' in callback_names:
+        log_dict[f"{sampler_type}/wbic/means"] = data["wbic/means"]
+        log_dict[f"{sampler_type}/wbic/stds"] = data["wbic/stds"]
+        return_dict[f"{sampler_type}/wbic/means/mean"] = data["wbic/means"].mean().item()
+        return_dict[f"{sampler_type}/wbic/std/mean"] = data["wbic/stds"].mean().item()
+
+    if 'WeightNorm' in callback_names:
+        weight_norm_p = plot_trace(data["weight_norm/trace"], "weight norm")
+        return_dict[f"{sampler_type}/weight_norm/mean"] = data["weight_norm/trace"].mean().item()
+        weight_norm_filename = "weight_norm.png"
+        weight_norm_p.save(weight_norm_filename, width=10, height=4, dpi=300)
+        log_dict["weight_norm"] = wandb.Image(weight_norm_filename)
+    
+    if 'NoiseNorm' in callback_names:
+        noise_norm_p = plot_trace(data["noise_norm/trace"], "noise norm")
+        return_dict[f"{sampler_type}/noise_norm/mean"] = data["noise_norm/trace"].mean().item()
+        noise_norm_filename = "noise_norm.png"
+        noise_norm_p.save(noise_norm_filename, width=10, height=4, dpi=300)
+        log_dict["noise_norm"] = wandb.Image(noise_norm_filename)
+    
+    if 'GradientNorm' in callback_names:
+        gradient_norm_p = plot_trace(data["gradient_norm/trace"], "gradient norm")
+        return_dict[f"{sampler_type}/gradient_norm/mean"] = data["gradient_norm/trace"].mean().item()
+        gradient_norm_filename = "gradient_norm.png"
+        gradient_norm_p.save(gradient_norm_filename, width=10, height=4, dpi=300)
+        log_dict["gradient_norm"] = wandb.Image(gradient_norm_filename)
+    
+    # TODO: additional metrics to be logged (e.g., GradientDistribution)
+    
+    wandb.log(log_dict, step=idx)
+    
+    return return_dict
     
     
 def rlct_checkpoints(config: MainConfig) -> None:
@@ -345,12 +381,9 @@ def rlct_checkpoints(config: MainConfig) -> None:
     
     train_loader = create_dataloader_hf(config, deterministic=False)
     
-    columns = ['sgld', 'sgnht', 'sgld_loss', 'sgld_std', 'sgnht_std', 'sgnht_loss']
-    rlct_df = pd.DataFrame(columns=columns)
-    
+    rlct_data_list: List[dict[str, float]] = []
     rlct_folder = Path(__file__).parent / config.rlct_config.rlct_data_dir
     rlct_folder.mkdir(parents=True, exist_ok=True)
-    
     rlct_criterion = construct_rlct_criterion(config)
 
     for epoch in range(config.num_epochs):
@@ -373,39 +406,19 @@ def rlct_checkpoints(config: MainConfig) -> None:
             device=device,
         )
 
-        sgld_results_dict = rlct_func(sampling_method=SGLD, optimizer_kwargs=config.rlct_config.sgld_kwargs)
-        sgld_mean, sgld_std, sgld_loss = sgld_results_dict["llc/mean"], sgld_results_dict["llc/std"], sgld_results_dict["loss/trace"]
-        sgld_p = plot_loss_trace(sgld_loss)
-        sgld_p.save("sgld_loss.png", width=10, height=4, dpi=300)
+        sgld_results, sgld_callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=config.rlct_config.sgld_kwargs)
+        sgnht_results, sgnht_callback_names = rlct_func(sampling_method=SGNHT, optimizer_kwargs=config.rlct_config.sgnht_kwargs)
         
-        sgnht_results_dict = rlct_func(sampling_method=SGNHT, optimizer_kwargs=config.rlct_config.sgnht_kwargs)
-        sgnht_mean, sgnht_std, sgnht_loss = sgnht_results_dict["llc/mean"], sgnht_results_dict["llc/std"], sgnht_results_dict["loss/trace"]
-        sgnht_p = plot_loss_trace(sgnht_loss)
-        sgnht_p.save("sgnht_loss.png", width=10, height=4, dpi=300)
+        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, sgld_callback_names, sampler_type="slgd", idx=epoch*config.eval_frequency)
+        sgnht_results_filtered = extract_and_save_rlct_data(sgnht_results, sgnht_callback_names, sampler_type="sgnht", idx=epoch*config.eval_frequency)
+        combined_results = sgld_results_filtered | sgnht_results_filtered # Python 3.9+
+        rlct_data_list.append(combined_results)
         
-        wandb.log({
-            "rlct_sgld.mean": sgld_mean, 
-            "rlct_sgld.std": sgld_std, 
-            "rlct_sgld.loss": wandb.Image("sgld_loss.png"),
-            "rlct_sgnht.mean": sgnht_mean, 
-            "rlct_sgnht.std": sgnht_std,
-            "rlct_sgnht.loss": wandb.Image("sgnht_loss.png"),
-            },
-            step=epoch * config.eval_frequency,
-        )
-
-        new_row = {
-            'sgld': sgld_mean,
-            'sgld_std': sgld_std,
-            'sgnht': sgnht_mean,
-            'sgnht_std': sgnht_std,
-        }
-        rlct_df = rlct_df._append(new_row, ignore_index=True)
-    
+    rlct_df = pd.DataFrame(rlct_data_list)
     rlct_df.to_csv(rlct_folder / f"{config.run_name}.csv")
-    rlct_artifact = wandb.Artifact(f"rlct_distill_{config.rlct_config.use_distill_loss}", type="rlct", description="RLCT mean and std for all samplers used.")
+    rlct_artifact = wandb.Artifact(f"rlct", type="rlct", description="RLCT diagnostics.")
     rlct_artifact.add_file(rlct_folder / f"{config.run_name}.csv")
-    wandb.log_artifact(rlct_artifact, aliases=[f"rlct_distill_{config.rlct_config.use_distill_loss}"])
+    wandb.log_artifact(rlct_artifact, aliases=[f"rlct_{config.run_name}"])
     
     wandb.finish()
 

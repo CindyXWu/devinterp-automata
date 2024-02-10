@@ -1,22 +1,18 @@
-"""Version of learning_coefficient.py updated with callbacks."""
-from typing import Callable, Dict, List, Literal, Optional, Type, Union
+from typing import Union
 
 import torch
-from torch.utils.data import DataLoader
 
-from di_automata.config_setup import MainConfig
-from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.slt.callback import SamplerCallback
-from di_automata.devinterp.slt.sampler import sample
 
 
 class LLCEstimator(SamplerCallback):
     """
     Callback for estimating the Local Learning Coefficient (LLC) in a rolling fashion during a sampling process. 
     It calculates the LLC based on the average loss across draws for each chain:
-    $$
-    TODO
-    $$
+    LLC = (n / log(n)) * (avg_loss - init_loss)
+    where n is the number of samples used to calculate the LLC, and init_loss is the loss at the first draw of the first chain.
+    
+    NOTE does not save data for individual chains.
     
     Attributes:
         num_chains (int): Number of chains to run. (should be identical to param passed to sample())
@@ -58,9 +54,9 @@ class LLCEstimator(SamplerCallback):
         }
     
     def __call__(self, chain: int, draw: int, loss: float):
+        """Pythonic: allow class member to behave as function."""
         self.update(chain, draw, loss)
-
-
+        
 
 class OnlineLLCEstimator(SamplerCallback):
     """
@@ -121,67 +117,3 @@ class OnlineLLCEstimator(SamplerCallback):
     
     def __call__(self, chain: int, draw: int, loss: float):
         self.update(chain, draw, loss)
-
-
-def estimate_learning_coeff_with_summary(
-    model: torch.nn.Module,
-    loader: DataLoader,
-    criterion: Callable,
-    main_config: MainConfig,
-    sampling_method: Type[torch.optim.Optimizer] = SGLD,
-    optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
-    device: torch.device = torch.device("cpu"),
-    callbacks: List[Callable] = [],
-    online: bool = False,
-) -> dict:
-    
-    num_chains = main_config.rlct_config.num_chains
-    num_draws = main_config.rlct_config.num_draws
-    if online:
-        llc_estimator = OnlineLLCEstimator(num_chains, num_draws, optimizer_kwargs['num_samples'], device=device)
-    else:
-        llc_estimator = LLCEstimator(num_chains, num_draws, optimizer_kwargs['num_samples'], device=device)
-
-    callbacks = [llc_estimator, *callbacks]
-
-    sample(
-        model=model,
-        loader=loader,
-        criterion=criterion,
-        sampling_method=sampling_method,
-        optimizer_kwargs=optimizer_kwargs,
-        main_config=main_config,
-        device=device,
-        callbacks=callbacks,
-    )
-
-    results = {}
-
-    for callback in callbacks:
-        if hasattr(callback, "sample"):
-            results.update(callback.sample())
-
-    return results
-
-
-def estimate_learning_coeff(
-    model: torch.nn.Module,
-    loader: DataLoader,
-    criterion: Callable,
-    main_config: MainConfig,
-    sampling_method: Type[torch.optim.Optimizer] = SGLD,
-    optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
-    device: torch.device = torch.device("cpu"),
-    callbacks: List[Callable] = [],
-) -> float:
-    return estimate_learning_coeff_with_summary(
-        model=model,
-        loader=loader,
-        criterion=criterion,
-        sampling_method=sampling_method,
-        optimizer_kwargs=optimizer_kwargs,
-        main_config=main_config,
-        device=device,
-        callbacks=callbacks,
-        online=False,
-    )["llc/mean"]

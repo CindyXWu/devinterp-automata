@@ -68,6 +68,7 @@ def construct_model(config: MainConfig) -> tuple[nn.Module, dict[str, InfParam]]
 class CustomLRScheduler(object):
     def __init__(self, optim: torch.optim.Optimizer, num_training_iter: int, base_lr: float, final_lr: float):
         self.base_lr = base_lr
+        self.final_lr = final_lr
         decay_iter = num_training_iter + 1
         self.lr_schedule = final_lr+0.5*(base_lr-final_lr)*(1+np.cos(np.pi*np.arange(decay_iter)/decay_iter))        
         self.optimizer = optim
@@ -82,6 +83,25 @@ class CustomLRScheduler(object):
 
     def get_lr(self):
         return self.current_lr
+    
+    
+    def state_dict(self):
+        """Returns the state of the scheduler as a dictionary."""
+        return {
+            'iter': self.iter,
+            'current_lr': self.current_lr,
+            'base_lr': self.base_lr,
+            'final_lr': self.final_lr,
+            'lr_schedule': self.lr_schedule.tolist(),
+        }
+
+    def load_state_dict(self, state_dict):
+        """Loads the scheduler's state."""
+        self.iter = state_dict['iter']
+        self.current_lr = state_dict['current_lr']
+        self.base_lr = state_dict.get('base_lr', self.base_lr)  # Default to existing if not found
+        self.final_lr = state_dict.get('final_lr', self.final_lr)
+        self.lr_schedule = np.array(state_dict.get('lr_schedule', self.lr_schedule)) 
     
     
 SchedulerType = Union[torch.optim.lr_scheduler.CosineAnnealingLR, torch.optim.lr_scheduler.StepLR, CustomLRScheduler]

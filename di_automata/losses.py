@@ -21,5 +21,5 @@ def predictive_kl_loss(x: Tensor, y: Tensor, teacher_model: nn.Module, student_m
     )
     
 
-def ce_rlct_loss(out: Tensor, y: Tensor) -> Tensor:
-    return F.cross_entropy(out.reshape(-1, out.size(-1)), y.view(-1))
+def ce_rlct_loss(logits: Tensor, labels: Tensor) -> Tensor:
+    return F.cross_entropy(logits, labels.long())

@@ -3,10 +3,16 @@ import itertools
 import inspect
 import warnings
 from tqdm import tqdm
+import math
 
 import torch
-from torch.multiprocessing import cpu_count, get_context
 from torch.utils.data import DataLoader, IterableDataset
+from torch.multiprocessing import cpu_count, get_context
+
+from di_automata.config_setup import MainConfig
+from di_automata.devinterp.optim.sgld import SGLD
+from di_automata.devinterp.slt.callback import SamplerCallback
+from di_automata.devinterp.rlct_utils import create_callbacks
 
 from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import MainConfig, RLCTConfig
@@ -16,6 +22,43 @@ from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.constructors import construct_model
 from di_automata.losses import predictive_kl_loss
 from di_automata.devinterp.slt.callback import SamplerCallback
+
+
+def estimate_learning_coeff_with_summary(
+    loader: DataLoader,
+    criterion: Callable,
+    main_config: MainConfig,
+    checkpoint: OrderedDict,
+    sampling_method: Type[torch.optim.Optimizer] = SGLD,
+    device: torch.device = torch.device("cpu"),
+    optimizer_kwargs: Optional[Dict[str, Union[float, Literal["adaptive"]]]] = None,
+) -> tuple[dict, list[str]]:
+    config = main_config.rlct_config
+
+    if optimizer_kwargs is None: # If not specified at run-time (e.g. where you want multiple types run at once) then use config
+        match config.sampling_method:
+            case "SGLD" | "SGLD_MA": optimizer_kwargs = config.sgld_kwargs
+            case "SGNHT": optimizer_kwargs = config.sgnht_kwargs
+    
+    callbacks, callback_names = create_callbacks(main_config, device)
+    
+    sample(
+        loader=loader,
+        criterion=criterion,
+        main_config=main_config,
+        checkpoint=checkpoint,
+        sampling_method=sampling_method,
+        optimizer_kwargs=optimizer_kwargs,
+        device=device,
+        callbacks=callbacks,
+    )
+
+    results = {}
+    for callback in callbacks:
+        if hasattr(callback, "sample"):
+            results.update(callback.sample())
+
+    return results, callback_names
 
 
 def call_with(func: Callable, **kwargs):
@@ -60,8 +103,6 @@ def sample_single_chain(
     if seed is not None:
         torch.manual_seed(seed)
     
-    if config.num_burnin_steps:
-        warnings.warn('Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.')
     if config.num_draws > len(loader):
         warnings.warn('You are taking more sample batches than there are dataloader batches available, this removes some randomness from sampling but is probably fine. (All sample batches beyond the number dataloader batches are cycled from the start, f.e. 9 samples from [A, B, C] would be [B, A, C, B, A, C, B, A, C].)')
     
@@ -116,6 +157,8 @@ def sample_single_chain(
         if i >= config.num_burnin_steps and (i - config.num_burnin_steps) % config.num_steps_bw_draws == 0:
             draw = (i - config.num_burnin_steps) // config.num_steps_bw_draws  # required for locals()
             loss = loss.item()
+            
+            assert not math.isnan(loss), "LLC mean is NaN. This is likely due to a bug in the optimizer - put breakpoints there."
 
             with torch.no_grad():
                 for callback in callbacks:

@@ -84,11 +84,11 @@ class SGNHT(torch.optim.Optimizer):
                     momentum.sub_(group["thermostat"] * momentum)
 
                     # Add Gaussian noise to momentum
-                    noise = torch.normal(
+                    self.noise = torch.normal(
                         mean=0.0, std=1.0, size=momentum.size(), device=momentum.device
                     )
                     momentum.add_(
-                        noise * ((group["lr"] * 2 * group["diffusion_factor"]) ** 0.5)
+                        self.noise * ((group["lr"] * 2 * group["diffusion_factor"]) ** 0.5)
                     )
 
                     # Update position

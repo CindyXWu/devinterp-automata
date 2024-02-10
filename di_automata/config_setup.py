@@ -137,20 +137,6 @@ class DatasetConfig(BaseModel):
     random_length: Optional[bool] = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
     seed: Optional[int] = Field(default=None)
     
-    @root_validator(pre=True)
-    def check_dataset_type(cls, values: dict):
-        if not values.get("output_vocab_size"):  # Did not specify the config for this class
-            pass
-        elif not cls._validate_dataset_type(values["dataset_type"]):
-            raise ValueError(f"Invalid dataset_type for {cls.__name__}")
-        return values
-    
-    @classmethod
-    def _validate_dataset_type(cls, dataset_type_name: DatasetType) -> bool:
-        dataset_type_str = dataset_type_name.value
-        mapped_class = config_class_map[dataset_type_str]
-        return mapped_class is cls
-    
     @property
     def dataset_filename(self):
         return f"{self.dataset_type}_{self.size}_{self.length}_{self.random_length}"
@@ -333,7 +319,7 @@ class DihedralAutomatonConfig(DatasetConfig):
 
     @property
     def vocab_size(self):
-        return self.n
+        return 2
     
     @property
     def output_vocab_size(self):
@@ -433,7 +419,8 @@ class RLCTConfig(BaseModel):
     sigma: float
     num_chains: int = Field(default=10)
     num_draws: int = Field(default=100)
-    num_burnin_steps: int = Field(default=0, description="Don't think this has been properly implemented yet.")
+    num_samples: int = Field(default=None, description="Total unique samples seen during RLCT sampling = min(unique datapoints in dataset as defined by task config, datapoints seen based on num_draws and num steps bw draws). Set by root validator.")
+    num_burnin_steps: int = Field(default=0, description="NOT IMPLEMENTED YET.")
     num_steps_bw_draws: int = Field(default=1)
     # Meta
     batch_size: int
@@ -470,7 +457,6 @@ class WandBConfig(BaseModel):
 
 
 class MainConfig(BaseModel):
-    dataset_type: DatasetType
     model_type: ModelType
     
     # Leave class type for task config open and instantiate properly in root validator
@@ -514,10 +500,9 @@ class MainConfig(BaseModel):
         Args:
             v (dict): Stores attributes of MainConfig object.
         """
-        assert v["dataset_type"] == v["task_config"]["dataset_type"], "Dataset type must match task config."
         # Instantiate correct class for task config
-        config_class = config_class_map[v["dataset_type"]]
         task_config = v["task_config"]
+        config_class = config_class_map[task_config["dataset_type"]]
         task_config_instance = config_class(**task_config)
         
         if not v["eval_frequency"]:
@@ -537,11 +522,18 @@ class MainConfig(BaseModel):
             v["nano_gpt_config"] = nano_gpt_config
         
         # Adjust RLCT parameters
-        v["rlct_config"]["sgld_kwargs"]["num_samples"] = v["rlct_config"]["sgnht_kwargs"]["num_samples"] = v["num_training_iter"] * v["dataloader_config"]["train_bs"]
+        rlct_config = v["rlct_config"]
+        # Set save folder name
         if not v["rlct_config"]["use_distill_loss"]:
             v["rlct_config"]["rlct_data_dir"] = "rlct_data"
         else:
             v["rlct_config"]["rlct_data_dir"] = "rlct_data_distill"
+        # Set total number of unique samples seen (n)
+        v["rlct_config"]["num_samples"] = min( (rlct_config["num_draws"] * rlct_config["num_steps_bw_draws"] + rlct_config["num_burnin_steps"]) * v["dataloader_config"]["train_bs"], task_config_instance.vocab_size**task_config_instance.length)
+        # Copy num samples to sampler kwargs for easy initialisation in main code. Be careful if this is not done it will break LLC estimator.
+        v["rlct_config"]["sgld_kwargs"]["num_samples"] = v["rlct_config"]["sgnht_kwargs"]["num_samples"] = v["rlct_config"]["num_samples"]
+        # Burnin not implemented yet
+        assert rlct_config.num_burnin_steps == 0, 'Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.'
         
         return v
 
