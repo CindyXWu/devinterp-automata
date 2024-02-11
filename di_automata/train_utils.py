@@ -150,14 +150,6 @@ class Run:
         logits_epoch = torch.cat(logits_epoch)
         self.ed_logits.append(logits_epoch)
         
-        # # Save and log to WandB
-        ## EDIT NOW MOVED TO END OF TRAINING
-        # torch.save(logits_epoch, "logits")
-        # logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-        # logit_artifact.add_file("logits", name="logits_artifact")
-        # wandb.log_artifact(logit_artifact, aliases=[f"epoch{self.epoch}_{self.config.run_name}"])
-        # os.remove("logits")
-        
         
     def _ed_calculation(self) -> None:
         """PCA and plot part of ED."""
@@ -190,8 +182,11 @@ class Run:
             
         for cache_dir in self.wandb_cache_dirs:
             if cache_dir.is_dir():
-                shutil.rmtree(cache_dir)
-                print(f"Removed {cache_dir}")
+                try: 
+                    shutil.rmtree(cache_dir)
+                    print(f"Removed {cache_dir}")
+                except OSError as e: 
+                    print(f"Failed to remove dir {cache_dir}.", e)
 
             
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
@@ -272,7 +267,8 @@ class Run:
         wandb.config.model_type = self.config.model_type
         
         # Location on remote GPU of WandB cache to delete periodically
-        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.local/share/wandb/artifacts", Path.home() / "root/.cache/wandb/artifacts/obj"]
+        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
+        """We also have "root/.local/share/wandb/artifacts", but this can't be deleted as often as doing so prevents proper upload of model checkpoints. Delete in finish_run() below."""
     
     
     def _evaluation_step(self) -> tuple[float, float]:
@@ -288,7 +284,7 @@ class Run:
         
         self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {self.epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.lr}, Loss Threshold: {self.config.loss_threshold}')
         
-        wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.config.optimizer_config.default_lr}, step=self.idx)
+        wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.lr}, step=self.idx)
         
         return train_loss, train_acc
 
@@ -329,7 +325,10 @@ class Run:
     
     
     def finish_run(self):
-        """Clean up last RLCT calculation, save data, finish WandB run and delete large temporary folders."""
+        """Clean up last RLCT calculation, save data, finish WandB run and delete large temporary folders.
+        
+        We define an extra cache dir to be removed at end of run here.
+        """
         if self.config.ed_train: 
             self._ed_calculation()
         if self.config.llc_train:
@@ -338,6 +337,10 @@ class Run:
             wandb.finish()
             
         self._del_wandb_cache()
+        upload_cache_dir = "root/.local/share/wandb/artifacts/staging", 
+        if upload_cache_dir.is_dir():
+            shutil.rmtree(upload_cache_dir)
+        shutil.rmtree("wandb")
                 
     
 def extract_and_save_rlct_data(

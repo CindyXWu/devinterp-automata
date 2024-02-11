@@ -4,9 +4,9 @@ defaults:
 model_type: NANO_GPT
 parameterisation: MUP
 
-calc_llc_train: false
-calc_ed_train: true
-calc_llc_checkpoint: false
+llc_train: false
+ed_train: true
+llc_checkpoint: false
 
 num_training_iter: 300
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)

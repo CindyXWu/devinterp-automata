@@ -11,12 +11,9 @@ task="adder,abab,alternating,dihedral"
 llc_train="False"
 ed_train="True"
 
-#WandB
-cache_dir="$HOME/.cache/wandb"
-
 # Hyperparams
-lr="0.01"
-final_lr="0.001"
+lr="0.03"
+final_lr="0.01"
 its="10000"
 eval_f="50"
 layers="3"
@@ -37,5 +34,5 @@ distill="True"
 
 for i in {1..1}
 do
-    HYDRA_FULL_ERROR=1 WANDB_CACHE_DIR=$cache_dir python $SCRIPT_PATH -m optimizer_config.default_lr=$lr optimizer_config.final_lr=$final_lr num_training_iter=$its eval_frequency=$eval_f task_config=$task ++task_config.length=$seq_len nano_gpt_config.n_layers=$layers rlct_config.sampling_method=$sampler rlct_config.num_chains=$chains rlct_config.ed_config.eval_frequency=$ed_eval_f rlct_config.sgld_kwargs.lr=$rlct_lr rlct_config.sgnht_kwargs.lr=$rlct_lr rlct_config.use_distill_loss=$distill rlct_config.sgld_kwargs.elasticity=$elasticity calc_llc_train=$llc_train calc_ed_train=$ed_train hydra.job.chdir=True
+    HYDRA_FULL_ERROR=1 python $SCRIPT_PATH -m optimizer_config.default_lr=$lr optimizer_config.final_lr=$final_lr num_training_iter=$its eval_frequency=$eval_f task_config=$task ++task_config.length=$seq_len nano_gpt_config.n_layers=$layers rlct_config.sampling_method=$sampler rlct_config.num_chains=$chains rlct_config.ed_config.eval_frequency=$ed_eval_f rlct_config.sgld_kwargs.lr=$rlct_lr rlct_config.sgnht_kwargs.lr=$rlct_lr rlct_config.use_distill_loss=$distill rlct_config.sgld_kwargs.elasticity=$elasticity llc_train=$llc_train ed_train=$ed_train hydra.job.chdir=True
 done
