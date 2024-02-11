@@ -14,15 +14,13 @@ from omegaconf import OmegaConf
 from functools import partial
 from sklearn.decomposition import PCA
 import pandas as pd
-import time
-import json
+import subprocess
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from di_automata.plotting.plot_utils import visualise_seq_data
 from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
@@ -114,9 +112,9 @@ class Run:
                 loss = criterion(logits, labels.long())
                 loss.backward()
                 self.optimizer.step()
-                if self.scheduler: # Code baked in for CustomLRScheduler instance for now 
+                if self.config.optimizer_config.cosine_lr_schedule: # Code baked in for CustomLRScheduler instance for now 
                     self.scheduler.step()
-                    self.lr = self.scheduler.current_lr
+                    self.lr = self.scheduler.get_lr()
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
@@ -128,7 +126,7 @@ class Run:
             train_loss, train_acc = self._evaluation_step()
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
 
-            if self.config.calc_llc_train: self._rlct_training()
+            if self.config.llc_train: self._rlct_training()
             
             if train_loss < self.config.loss_threshold:
                 print(f'Average training loss {train_loss:.3f} is below the threshold {self.config.loss_threshold}. Training stopped.')
@@ -152,12 +150,13 @@ class Run:
         logits_epoch = torch.cat(logits_epoch)
         self.ed_logits.append(logits_epoch)
         
-        # Save and log to WandB
-        torch.save(logits_epoch, "logits")
-        logit_artifact = wandb.Artifact(f"logits", type="logits", description="The trained model state_dict")
-        logit_artifact.add_file("logits", name="config.yaml")
-        wandb.log_artifact(logit_artifact, aliases=[f"epoch{self.epoch}_{self.config.run_name}"])
-        os.remove("logits")
+        # # Save and log to WandB
+        ## EDIT NOW MOVED TO END OF TRAINING
+        # torch.save(logits_epoch, "logits")
+        # logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
+        # logit_artifact.add_file("logits", name="logits_artifact")
+        # wandb.log_artifact(logit_artifact, aliases=[f"epoch{self.epoch}_{self.config.run_name}"])
+        # os.remove("logits")
         
         
     def _ed_calculation(self) -> None:
@@ -177,8 +176,30 @@ class Run:
         p = plot_components(projected_1, projected_2, projected_3)
         p.save("plot.png", width=10, height=4, dpi=300)
         wandb.log({"ED_PCA": wandb.Image("plot.png")})
+        
+        torch.save(concat_logit_matrix, "logits")
+        logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
+        logit_artifact.add_file("logits", name="logits_artifact")
+        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}"])
+        self._del_wandb_cache()
     
     
+    def _del_wandb_cache(self):
+        shutil.rmtree('wandb')
+        
+        command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0:
+            print("Deleted WandB files. Output:", result.stdout)
+        else:
+            print("Error:", result.stderr)
+            
+        if self.wandb_cache_1.is_dir():
+            shutil.rmtree(self.wandb_cache_1)
+        if self.wandb_cache_2.is_dir():
+            shutil.rmtree(self.wandb_cache_2)
+
+            
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
         """Estimate RLCT for a given epoch during training.
 
@@ -200,7 +221,7 @@ class Run:
         sgld_results, callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=self.config.rlct_config.sgld_kwargs)
         sgnht_results, callback_names = rlct_func(sampling_method=SGNHT, optimizer_kwargs=self.config.rlct_config.sgnht_kwargs)
         
-        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, callback_names, sampler_type="slgd", idx=self.idx)
+        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, callback_names, sampler_type="sgld", idx=self.idx)
         sgnht_results_filtered = extract_and_save_rlct_data(sgnht_results, callback_names, sampler_type="sgnht", idx=self.idx)
         combined_results = sgld_results_filtered | sgnht_results_filtered
         self.rlct_data_list.append(combined_results)
@@ -255,6 +276,10 @@ class Run:
         # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
         wandb.config.dataset_type = self.config.task_config.dataset_type
         wandb.config.model_type = self.config.model_type
+        
+        # Location on remote GPU of WandB cache to delete periodically
+        self.wandb_cache_1 = Path.home() / ".cache/wandb/artifacts/obj"
+        self.wandb_cache_2 = Path.home() / "root/.local/share/wandb/artifacts"
     
     
     def _evaluation_step(self) -> tuple[float, float]:
@@ -295,6 +320,8 @@ class Run:
             file_path =  self.model_save_dir / f"{self.config.run_name}"
             data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
             torch.save(dict(state, **data), f"{file_path}.torch")
+        
+        self._del_wandb_cache()
             
             
     def _clean_sweep(self, sweep: "Sweep") -> List["Sweep"]:
@@ -310,19 +337,15 @@ class Run:
     
     def finish_run(self):
         """Clean up last RLCT calculation, save data, finish WandB run and delete large temporary folders."""
-        if self.config.calc_ed_train: 
+        if self.config.ed_train: 
             self._ed_calculation()
-        if self.config.calc_llc_train:
+        if self.config.llc_train:
             self.save_rlct()
         if self.config.is_wandb_enabled:
             wandb.finish()
             
-        # Delete items
-        shutil.rmtree('wandb')
-        del variables
-        gc.collect()
-        torch.cuda.empty_cache()
-    
+        self._del_wandb_cache()
+                
     
 def extract_and_save_rlct_data(
     data: dict, 
@@ -431,7 +454,7 @@ def rlct_checkpoints(config: MainConfig) -> None:
         sgld_results, sgld_callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=config.rlct_config.sgld_kwargs)
         sgnht_results, sgnht_callback_names = rlct_func(sampling_method=SGNHT, optimizer_kwargs=config.rlct_config.sgnht_kwargs)
         
-        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, sgld_callback_names, sampler_type="slgd", idx=epoch*config.eval_frequency)
+        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, sgld_callback_names, sampler_type="sgld", idx=epoch*config.eval_frequency)
         sgnht_results_filtered = extract_and_save_rlct_data(sgnht_results, sgnht_callback_names, sampler_type="sgnht", idx=epoch*config.eval_frequency)
         combined_results = sgld_results_filtered | sgnht_results_filtered # Python 3.9+
         rlct_data_list.append(combined_results)

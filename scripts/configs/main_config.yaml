@@ -63,12 +63,12 @@ rlct_config:
   online: false
   verbose: true
   return_weights: true
-  use_distill_loss: false
+  use_distill_loss: true
   save_results: true
 
   sgld_kwargs:
     lr: 5e-7
-    noise_level: 0.5
+    noise_level: 0.1
     weight_decay: 5e-8
     elasticity: 10
     temperature: adaptive

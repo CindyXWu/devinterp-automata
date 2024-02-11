@@ -402,7 +402,7 @@ class SGNHT_Kwargs(BaseModel):
 
 class SGLD_Kwargs(BaseModel):
     lr: float
-    noise_level: float = Field(default=1.0, description="Standard deviation for Gaussian noise added in SGLD.")
+    noise_level: float = Field(default=1.0, description="Standard deviation for Gaussian noise added in SGLD. Value should be set to not dominate gradient norm.")
     weight_decay: float = Field(default=1e-6, description="Something like [1e-5, 1e-6, 1e-7].")
     elasticity: float = Field(default=1.0, description="Something like [1, 10, 100].")
     bounding_box_size: float = Field(default=None, description="If set, prevents LLC estimator chain from wandering too far.")
@@ -478,9 +478,9 @@ class MainConfig(BaseModel):
     wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     
     ## Training bits and bobs
-    calc_llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
-    calc_llc_checkpoint: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
-    calc_ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
+    llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
+    llc_cp: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
+    ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
     num_eval_batches: Optional[int] = Field(default=20)

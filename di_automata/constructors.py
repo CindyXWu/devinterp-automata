@@ -84,7 +84,6 @@ class CustomLRScheduler(object):
     def get_lr(self):
         return self.current_lr
     
-    
     def state_dict(self):
         """Returns the state of the scheduler as a dictionary."""
         return {
