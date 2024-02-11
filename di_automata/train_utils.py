@@ -185,19 +185,13 @@ class Run:
     
     
     def _del_wandb_cache(self):
-        shutil.rmtree('wandb')
-        
         command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode == 0:
-            print("Deleted WandB files. Output:", result.stdout)
-        else:
-            print("Error:", result.stderr)
             
-        if self.wandb_cache_1.is_dir():
-            shutil.rmtree(self.wandb_cache_1)
-        if self.wandb_cache_2.is_dir():
-            shutil.rmtree(self.wandb_cache_2)
+        for cache_dir in self.wandb_cache_dirs:
+            if cache_dir.is_dir():
+                shutil.rmtree(cache_dir)
+                print(f"Removed {cache_dir}")
 
             
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
@@ -278,8 +272,7 @@ class Run:
         wandb.config.model_type = self.config.model_type
         
         # Location on remote GPU of WandB cache to delete periodically
-        self.wandb_cache_1 = Path.home() / ".cache/wandb/artifacts/obj"
-        self.wandb_cache_2 = Path.home() / "root/.local/share/wandb/artifacts"
+        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.local/share/wandb/artifacts", Path.home() / "root/.cache/wandb/artifacts/obj"]
     
     
     def _evaluation_step(self) -> tuple[float, float]:
