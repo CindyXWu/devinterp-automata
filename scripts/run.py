@@ -37,7 +37,7 @@ def main(config: MainConfig) -> None:
     run.train()
     run.finish_run()
     
-    if config.calc_llc_checkpoint:
+    if config.llc_cp:
         rlct_checkpoints(omegaconf_config)
 
 # def run_sweep():

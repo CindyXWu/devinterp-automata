@@ -3,8 +3,9 @@
 # This script can optionally manage the main config name via command line passing to Hydra
 SCRIPT_PATH="run.py"
 
-task="adder,abab,alternating,dihedral"
-# task="cyclic,flipflop,gridworld,parity"
+# task="adder,abab,alternating,dihedral"
+# task="cyclic,flipflop"
+task="flipflop,gridworld,parity"
 # task="quaternion,permutation_reset,symmetric"
 
 # Whether to log particular things
@@ -13,7 +14,7 @@ ed_train="True"
 
 # Hyperparams
 lr="0.01"
-final_lr="0.05"
+final_lr="0.005"
 its="3000"
 eval_f="200"
 layers="4"

@@ -25,7 +25,8 @@ from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
-    plot_components,
+    plot_pca_plotly,
+    plot_explained_var,
     plot_trace,
 )
 from di_automata.tasks.data_utils import take_n
@@ -163,10 +164,14 @@ class Run:
             projected_1.append(projected_vector[0])
             projected_2.append(projected_vector[1])
             projected_3.append(projected_vector[2])
-
-        p = plot_components(projected_1, projected_2, projected_3)
-        p.save("plot.png", width=10, height=4, dpi=300)
-        wandb.log({"ED_PCA": wandb.Image("plot.png")})
+        explained_variance = pca.explained_variance_ratio_
+        
+        plot_pca_plotly(projected_1, projected_2, projected_3, "PCA.png")
+        plot_explained_var(explained_variance)
+        wandb.log({
+            "ED_PCA": wandb.Image("PCA.png"),
+            "explained_var": wandb.Image("pca_explained_var.png"),
+        })
         
         torch.save(concat_logit_matrix, "logits")
         logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")

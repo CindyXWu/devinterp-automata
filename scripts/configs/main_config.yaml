@@ -6,7 +6,7 @@ parameterisation: MUP
 
 llc_train: false
 ed_train: true
-llc_checkpoint: false
+llc_cp: false
 
 num_training_iter: 300
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
