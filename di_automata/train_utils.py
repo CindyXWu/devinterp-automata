@@ -114,13 +114,12 @@ class Run:
                 self.optimizer.step()
                 if self.config.optimizer_config.cosine_lr_schedule: # Code baked in for CustomLRScheduler instance for now 
                     self.scheduler.step()
-                    self.lr = self.scheduler.get_lr()
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
                     self._ed_data_training()
-                    self._save_model() # Save model but do not log other metrics at this frequency
+                    # self._save_model() # Save model but do not log other metrics at this frequency
                     iter_model_saved = True
                 
             train_loss, train_acc = self._evaluation_step()
@@ -158,7 +157,7 @@ class Run:
         pca.fit(concat_logit_matrix.cpu().numpy())
         
         projected_1, projected_2, projected_3 = [], [], []
-        for epoch in range(self.config.num_epochs - 1):
+        for epoch in range(self.config.num_training_iter // self.config.rlct_config.ed_config.eval_frequency):
             logits_epoch = rearrange(self.ed_logits[epoch], 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
             projected_1.append(projected_vector[0])
@@ -225,9 +224,7 @@ class Run:
                 
             
     def restore_model(self, resume_training: bool = False) -> None:
-        """Restore from a checkpoint on wandb. 
-        
-        TODO: implement local storing?
+        """Restore from a checkpoint on WandB.
         """
         artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:epoch{self.epoch}_{self.config.run_name}")
         data_dir = artifact.download()
@@ -249,26 +246,6 @@ class Run:
             self.model = torch.compile(model)
             self.optimizer.load_state_dict(optimizer_state_dict)
             self.scheduler.load_state_dict(scheduler_state_dict)
-            
-            
-    def _set_logger(self) -> None:
-        """Currently uses wandb as default."""
-        logging.info(f"Hydra current working directory: {os.getcwd()}")
-        logger_params = {
-            "name": self.config.run_name,
-            "project": self.config.wandb_config.wandb_project_name,
-            "settings": wandb.Settings(start_method="thread"),
-            "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
-            "mode": "disabled" if not self.config.is_wandb_enabled else "online",
-        }
-        self.run = wandb.init(**logger_params, entity="wu-cindyx")
-        # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
-        wandb.config.dataset_type = self.config.task_config.dataset_type
-        wandb.config.model_type = self.config.model_type
-        
-        # Location on remote GPU of WandB cache to delete periodically
-        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
-        """We also have "root/.local/share/wandb/artifacts", but this can't be deleted as often as doing so prevents proper upload of model checkpoints. Delete in finish_run() below."""
     
     
     def _evaluation_step(self) -> tuple[float, float]:
@@ -284,7 +261,7 @@ class Run:
         
         self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {self.epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.lr}, Loss Threshold: {self.config.loss_threshold}')
         
-        wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.lr}, step=self.idx)
+        wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.scheduler.get_lr()}, step=self.idx)
         
         return train_loss, train_acc
 
@@ -324,6 +301,26 @@ class Run:
         return list(r for r in _clean_sweep())
     
     
+    def _set_logger(self) -> None:
+        """Currently uses WandB as default."""
+        logging.info(f"Hydra current working directory: {os.getcwd()}")
+        logger_params = {
+            "name": self.config.run_name,
+            "project": self.config.wandb_config.wandb_project_name,
+            "settings": wandb.Settings(start_method="thread"),
+            "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
+            "mode": "disabled" if not self.config.is_wandb_enabled else "online",
+        }
+        self.run = wandb.init(**logger_params, entity="wu-cindyx")
+        # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
+        wandb.config.dataset_type = self.config.task_config.dataset_type
+        wandb.config.model_type = self.config.model_type
+        
+        # Location on remote GPU of WandB cache to delete periodically
+        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
+        """We also have "root/.local/share/wandb/artifacts", but this can't be deleted as often as doing so prevents proper upload of model checkpoints. Delete in finish_run() below."""
+        
+        
     def finish_run(self):
         """Clean up last RLCT calculation, save data, finish WandB run and delete large temporary folders.
         
@@ -336,8 +333,7 @@ class Run:
         if self.config.is_wandb_enabled:
             wandb.finish()
             
-        self._del_wandb_cache()
-        upload_cache_dir = "root/.local/share/wandb/artifacts/staging", 
+        upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
         if upload_cache_dir.is_dir():
             shutil.rmtree(upload_cache_dir)
         shutil.rmtree("wandb")

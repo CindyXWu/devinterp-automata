@@ -12,11 +12,11 @@ llc_train="False"
 ed_train="True"
 
 # Hyperparams
-lr="0.03"
-final_lr="0.01"
-its="10000"
-eval_f="50"
-layers="3"
+lr="0.01"
+final_lr="0.05"
+its="3000"
+eval_f="200"
+layers="4"
 seq_len="25"
 
 # RLCT
