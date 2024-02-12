@@ -43,8 +43,8 @@ def plot_pca_ggplot(
 def plot_pca_plotly(
     component_0: list[float], 
     component_1: list[float], 
-    component_2: list[float],
-    filename: str, 
+    component_2: list[float], 
+    config: MainConfig,
 ):
     fig = make_subplots(rows=1, cols=3, subplot_titles=("Component 0 vs. 1", "Component 0 vs. 2", "Component 1 vs. 2"))
 
@@ -64,21 +64,21 @@ def plot_pca_plotly(
                              showlegend=False), 
                   row=1, col=3)
 
-    fig.update_xaxes(title_text="Component 0", row=1, col=1)
-    fig.update_yaxes(title_text="Component 1", row=1, col=1)
+    fig.update_xaxes(title_text="Component 1", row=1, col=1)
+    fig.update_yaxes(title_text="Component 2", row=1, col=1)
     
-    fig.update_xaxes(title_text="Component 0", row=1, col=2)
-    fig.update_yaxes(title_text="Component 2", row=1, col=2)
+    fig.update_xaxes(title_text="Component 1", row=1, col=2)
+    fig.update_yaxes(title_text="Component 3", row=1, col=2)
 
-    fig.update_xaxes(title_text="Component 1", row=1, col=3)
-    fig.update_yaxes(title_text="Component 2", row=1, col=3)
+    fig.update_xaxes(title_text="Component 2", row=1, col=3)
+    fig.update_yaxes(title_text="Component 3", row=1, col=3)
 
     fig.update_layout(
-        title_text="Essential Dynamics PCA", 
+        title_text=f"Essential Dynamics PCA {config.task_config.dataset_type} seqlen {config.task_config.length} its {config.num_training_iter} cpfreq {config.rlct_config.ed_config.eval_frequency}", 
         height=500, width=1500,
     )
 
-    fig.write_image(filename)
+    fig.write_image("PCA.png")
     
     
 def plot_explained_var(explained_var: np.ndarray):
@@ -89,7 +89,7 @@ def plot_explained_var(explained_var: np.ndarray):
     plt.xticks([1, 2, 3])
     plt.title('Explained variance by top 3 PCA components')
     plt.legend(loc='best')
-    plt.savefig("pca_explained_variance.png", dpi=300)
+    plt.savefig("pca_explained_var.png", dpi=300)
     
 
 def plot_trace(trace: np.ndarray, name: str):

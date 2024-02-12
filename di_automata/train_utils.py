@@ -1,5 +1,5 @@
 """"Make Run class which contains all relevant logic for instantiating and training."""
-from typing import Tuple, List, Dict, TypedDict, TypeVar
+from typing import Tuple, List, TypeVar
 import typing
 from pathlib import Path
 from tqdm import tqdm
@@ -15,6 +15,7 @@ from functools import partial
 from sklearn.decomposition import PCA
 import pandas as pd
 import subprocess
+from torch_ema import ExponentialMovingAverage
 
 import torch
 import torch.nn as nn
@@ -33,31 +34,18 @@ from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import *
 from di_automata.constructors import (
     construct_model, 
-    optimizer_constructor, 
+    optimizer_constructor,
+    ema_constructor,
     initialise_model,
     create_dataloader_hf,
     construct_rlct_criterion,
+    get_state_dict,
 )
 Sweep = TypeVar("Sweep")
 
 # Path to root dir (with setup.py)
 PROJECT_ROOT = Path(__file__).parent.parent
 
-
-class StateDict(TypedDict):
-    model: Dict
-    optimizer: Dict
-    scheduler: Dict
-    
-    
-def get_state_dict(model, optimizer, scheduler) -> StateDict:
-    """If cosine LR scheduler not used, scheduler is None."""
-    return {
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": {k: v for k,v in scheduler.state_dict().items() if not callable(v)} if scheduler is not None else None,
-    }
-    
 
 class Run:
     def __init__(
@@ -77,6 +65,12 @@ class Run:
         # self.model = torch.compile(self.model) # Not supported for Windows. Bill Gates computer.
         
         self.optimizer, self.scheduler = optimizer_constructor(config, self.model, param_inf_properties)
+        
+        if self.config.use_ema:
+            self.ema = ema_constructor(self.model, self.config.ema_decay)
+            self.ema.to(self.device)
+        else:
+            self.ema = None
 
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
@@ -113,8 +107,12 @@ class Run:
                 loss = criterion(logits, labels.long())
                 loss.backward()
                 self.optimizer.step()
+                
                 if self.config.optimizer_config.cosine_lr_schedule: # Code baked in for CustomLRScheduler instance for now 
                     self.scheduler.step()
+                if self.config.use_ema:
+                    self.ema.update()
+                    
                 train_loss.append(loss.item())
                 self.progress_bar.update()
                 
@@ -158,15 +156,15 @@ class Run:
         pca.fit(concat_logit_matrix.cpu().numpy())
         
         projected_1, projected_2, projected_3 = [], [], []
-        for epoch in range(self.config.num_training_iter // self.config.rlct_config.ed_config.eval_frequency):
-            logits_epoch = rearrange(self.ed_logits[epoch], 'n -> 1 n').cpu().numpy()
+        for idx in range(self.idx // self.config.rlct_config.ed_config.eval_frequency):
+            logits_epoch = rearrange(self.ed_logits[idx], 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
             projected_1.append(projected_vector[0])
             projected_2.append(projected_vector[1])
             projected_3.append(projected_vector[2])
         explained_variance = pca.explained_variance_ratio_
         
-        plot_pca_plotly(projected_1, projected_2, projected_3, "PCA.png")
+        plot_pca_plotly(projected_1, projected_2, projected_3, self.config)
         plot_explained_var(explained_variance)
         wandb.log({
             "ED_PCA": wandb.Image("PCA.png"),
@@ -226,31 +224,6 @@ class Run:
         rlct_artifact = wandb.Artifact(f"rlct_distill_{self.config.rlct_config.use_distill_loss}", type="rlct", description="RLCT mean and std for all samplers used.")
         rlct_artifact.add_file(self.rlct_folder / f"{self.config.run_name}.csv")
         wandb.log_artifact(rlct_artifact, aliases=[f"rlct_distill_{self.config.rlct_config.use_distill_loss}"])
-                
-            
-    def restore_model(self, resume_training: bool = False) -> None:
-        """Restore from a checkpoint on WandB.
-        """
-        artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:epoch{self.epoch}_{self.config.run_name}")
-        data_dir = artifact.download()
-        config_path = Path(data_dir) / "config.yaml"
-        model_state_path = Path(data_dir) / "states.torch"
-        config = OmegaConf.load(config_path)
-        self.config = typing.cast(MainConfig, config)
-        states = torch.load(model_state_path)
-        
-        self.model_state_dict, optimizer_state_dict, scheduler_state_dict = states["model"], states["optimizer"], states["scheduler"]
-        
-        if resume_training:
-            # Only need below code if a) passing ref model in and doing deepcopy;
-            # b) using this function outside of RLCT estimation for e.g. resuming training
-            model, _ = construct_model(self.config)
-            model.load_state_dict(self.model_state_dict)
-            model.to(self.device)
-            model.train()
-            self.model = torch.compile(model)
-            self.optimizer.load_state_dict(optimizer_state_dict)
-            self.scheduler.load_state_dict(scheduler_state_dict)
     
     
     def _evaluation_step(self) -> tuple[float, float]:
@@ -259,7 +232,7 @@ class Run:
             model=self.model, 
             data_loader=self.train_loader, 
             num_eval_batches=self.config.num_eval_batches,
-            idx=self.idx
+            ema=self.ema if self.config.use_ema else None,
         )
         self.train_acc_list.append(train_acc)
         self.train_loss_list.append(train_loss)
@@ -273,7 +246,7 @@ class Run:
 
     def _save_model(self) -> None:
         model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
-        state = get_state_dict(model_to_save, self.optimizer, self.scheduler)
+        state = get_state_dict(model_to_save, self.optimizer, self.scheduler, self.ema)
         torch.save(
             state, # Save optimizer, model and scheduler all in one go
             Path(".") / "states.torch", # Working directory configured by Hydra as output directory
@@ -342,6 +315,33 @@ class Run:
         if upload_cache_dir.is_dir():
             shutil.rmtree(upload_cache_dir)
         shutil.rmtree("wandb")
+        
+    
+    def restore_model(self, resume_training: bool = False) -> None:
+        """Restore from a checkpoint on WandB.
+        
+        Currently not in use and needs updating for EMA.
+        """
+        artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:epoch{self.epoch}_{self.config.run_name}")
+        data_dir = artifact.download()
+        config_path = Path(data_dir) / "config.yaml"
+        model_state_path = Path(data_dir) / "states.torch"
+        config = OmegaConf.load(config_path)
+        self.config = typing.cast(MainConfig, config)
+        states = torch.load(model_state_path)
+        
+        self.model_state_dict, optimizer_state_dict, scheduler_state_dict = states["model"], states["optimizer"], states["scheduler"]
+        
+        if resume_training:
+            # Only need below code if a) passing ref model in and doing deepcopy;
+            # b) using this function outside of RLCT estimation for e.g. resuming training
+            model, _ = construct_model(self.config)
+            model.load_state_dict(self.model_state_dict)
+            model.to(self.device)
+            model.train()
+            self.model = torch.compile(model)
+            self.optimizer.load_state_dict(optimizer_state_dict)
+            self.scheduler.load_state_dict(scheduler_state_dict)
                 
     
 def extract_and_save_rlct_data(
@@ -470,7 +470,7 @@ def evaluate(
     model: nn.Module, 
     data_loader: DataLoader,
     num_eval_batches: int,
-    idx: int,
+    ema: Optional[ExponentialMovingAverage] = None,
     device: torch.device = torch.device("cuda"),
 ) -> Tuple[float, float]:
     """"
@@ -484,19 +484,19 @@ def evaluate(
     model = model.to(device).eval()
     total_accuracy = 0.
     total_loss = 0.
-    assert isinstance(idx, int), "idx must be an int"
 
-    for data in take_n(data_loader, num_eval_batches):
-        inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
-        outputs = model(inputs)
+    with ema.average_parameters():
+        for data in take_n(data_loader, num_eval_batches):
+            inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
+            outputs = model(inputs)
         
-        total_loss += F.cross_entropy(outputs, labels.long())
-        # Second dimension is class dimension in PyTorch for sequence data (see AutoGPT transformer for details)
-        probs = torch.softmax(outputs, dim=1)
-        predictions = torch.argmax(probs, dim=1)
+            total_loss += F.cross_entropy(outputs, labels.long())
+            # Second dimension is class dimension in PyTorch for sequence data (see AutoGPT transformer for details)
+            probs = torch.softmax(outputs, dim=1)
+            predictions = torch.argmax(probs, dim=1)
 
-        correct_predictions = predictions == labels
-        total_accuracy += correct_predictions.float().mean().item() * 100
+            correct_predictions = predictions == labels
+            total_accuracy += correct_predictions.float().mean().item() * 100
 
     model.train()
     return total_accuracy / num_eval_batches, (total_loss / num_eval_batches).item()
@@ -509,14 +509,3 @@ def update_with_wandb_config(config: OmegaConf, sweep_params: list[str]) -> Omeg
             print("Updating param with value from wandb config: ", param)
             OmegaConf.update(config, param, wandb.config[param], merge=True)
     return config
-        
-        
-def get_previous_commit_hash():
-    """Used to get Github commit hash."""
-    try:
-        # Execute the git command to get the previous commit hash
-        commit_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD~1'], stderr=subprocess.STDOUT).decode('utf-8').strip()
-        return commit_hash
-    except subprocess.CalledProcessError as e:
-        print(f"Error: {e.output.decode('utf-8')}")
-        return None

@@ -127,7 +127,7 @@ class DataLoaderConfig(BaseModel):
     num_workers: int = Field(default=1)
     train_fraction: float = Field(default=0.95)
     shuffle_train: bool = Field(default=True)
-
+    
 
 class DatasetConfig(BaseModel):
     """All automaton dataset classes below inherit from this."""
@@ -481,6 +481,8 @@ class MainConfig(BaseModel):
     llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
     llc_cp: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
     ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
+    use_ema: bool = Field(default=True, description="Whether to use exponential moving average of model parameters.")
+    ema_decay: float = Field(default=0.9, description="Decay factor for EMA.")
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
     num_eval_batches: Optional[int] = Field(default=20)

@@ -1,6 +1,7 @@
-from typing import Union, Optional
+from typing import Union, Optional, Dict, TypedDict
 import numpy as np
 import logging
+from torch_ema import ExponentialMovingAverage
 
 import torch
 import torch.nn as nn
@@ -28,8 +29,8 @@ from di_automata.mup.optim_params import (
     get_mup_sgd_param_groups,
 )
 from di_automata.mup.utils import get_param_name
-
-
+    
+    
 def create_dataloader_hf(config: MainConfig, deterministic: Optional[bool] = False) -> DataLoader:
     """Load dataset from automata.py.
     
@@ -191,6 +192,13 @@ def optimizer_constructor(
     return optim, scheduler
 
 
+def ema_constructor(
+    model: nn.Module,
+    ema_decay: float,
+) -> ExponentialMovingAverage:
+    return ExponentialMovingAverage(model.parameters(), decay=ema_decay)
+    
+    
 def initialise_model(
     config: MainConfig, 
     model: nn.Module, 
@@ -259,3 +267,29 @@ def construct_rlct_criterion(config: MainConfig):
         return ce_rlct_loss
     elif config.rlct_config.rlct_loss_type == RLCTLossType.DISTILL:
         return predictive_kl_loss
+
+
+class StateDict(TypedDict):
+    model: Dict
+    optimizer: Dict
+    scheduler: Dict
+    
+    
+def get_state_dict(
+    model: nn.Module, 
+    optimizer: torch.optim.Optimizer, 
+    scheduler: Optional[CustomLRScheduler] = None, 
+    ema: Optional[ExponentialMovingAverage] = None,
+) -> StateDict:
+    """If cosine LR scheduler not used, scheduler is None."""
+    if ema is not None:
+        with ema.average_parameters():
+            model_state_dict = model.state_dict()
+    else:
+        model_state_dict = model.state_dict()
+    return {
+        "model": model_state_dict,
+        "optimizer": optimizer.state_dict(),
+        "scheduler": {k: v for k,v in scheduler.state_dict().items() if not callable(v)} if scheduler is not None else None,
+        "ema": ema.state_dict() if ema is not None else None,
+    }

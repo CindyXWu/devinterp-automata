@@ -7,12 +7,14 @@ parameterisation: MUP
 llc_train: false
 ed_train: true
 llc_cp: false
+use_ema: True
 
 num_training_iter: 300
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
+ema_decay: 0.9
 loss_threshold: 0.01
 num_eval_batches: 20
-save_local: false # Probably change if running on cloud
+
 run_name: null
 is_wandb_enabled: false
 num_epochs: null
