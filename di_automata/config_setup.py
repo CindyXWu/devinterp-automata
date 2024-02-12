@@ -207,7 +207,7 @@ class ABABAutomatonConfig(BinaryInputAutomatonConfig):
     @property
     def output_vocab_size(self):
         match self.label_type:
-            case ABABAutomatonConfig.Label.STATE: return 4 # Predict 0, 1, 2, 3 (see init of ABABAutomaton)
+            case ABABAutomatonConfig.Label.STATE: return 5 # Predict [0...4] (see init of ABABAutomaton)
             case ABABAutomatonConfig.Label.BOUNDARY: return 2
 
 
@@ -486,7 +486,6 @@ class MainConfig(BaseModel):
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
     num_eval_batches: Optional[int] = Field(default=20)
-    loss_threshold: float = Field(default=1e-5)
     
     # Set by validator
     run_name: Optional[str]

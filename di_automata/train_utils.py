@@ -125,10 +125,6 @@ class Run:
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
 
             if self.config.llc_train: self._rlct_training()
-            
-            if train_loss < self.config.loss_threshold:
-                print(f'Average training loss {train_loss:.3f} is below the threshold {self.config.loss_threshold}. Training stopped.')
-                break
 
             if not iter_model_saved: self._save_model()
         
@@ -237,7 +233,7 @@ class Run:
         self.train_acc_list.append(train_acc)
         self.train_loss_list.append(train_loss)
         
-        self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {self.epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.lr}, Loss Threshold: {self.config.loss_threshold}')
+        self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {self.epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.lr}')
         
         wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.scheduler.get_lr()}, step=self.idx)
         
