@@ -14,6 +14,7 @@ from functools import partial
 from sklearn.decomposition import PCA
 import pandas as pd
 import subprocess
+import math
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -87,7 +88,7 @@ class Run:
         self.idx, self.epoch = 0, 0
         self.lr = self.config.optimizer_config.default_lr
         no_improve_count = 0
-        best_loss = 0.0
+        best_loss = 1000
         
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
@@ -120,15 +121,15 @@ class Run:
                     # self._save_model() # Save model but do not log other metrics at this frequency
                     iter_model_saved = True
                 
-                # Early-stopping
-                if torch.log(loss) < torch.log(best_loss):
-                    best_loss = loss
-                    no_improve_count = 0
-                else:
-                    no_improve_count += 1
-                if no_improve_count >= self.config.early_stop_patience:
-                    print(f"Early stopping: log loss has not decreased in {self.config.early_stop_patience} steps.")
-                    return
+            # Early-stopping
+            if math.log(loss.item()) < math.log(best_loss):
+                best_loss = loss.item()
+                no_improve_count = 0
+            else:
+                no_improve_count += 1
+            if no_improve_count >= self.config.early_stop_patience:
+                print(f"Early stopping: log loss has not decreased in {self.config.early_stop_patience} steps.")
+                return
                 
             train_loss, train_acc = self._evaluation_step()
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
@@ -356,8 +357,8 @@ def evaluate(
 ) -> Tuple[float, float]:
     """"
     Args:
-        subset: Whether to evaluate on whole dataloader or just a subset.
         num_eval_batches: If we aren't evaluating on the whole dataloader, then do on this many batches.
+        ema: EMA object whose average_parameters() context is used for model evaluation.
     Returns:
         accuracy: Average percentage accuracy on batch.
         loss: Average loss on batch.

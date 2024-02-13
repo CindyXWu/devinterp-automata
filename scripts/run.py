@@ -3,7 +3,7 @@ from omegaconf import OmegaConf
 
 from scripts.create_sweep import load_config
 from di_automata.config_setup import MainConfig
-from di_automata.train_utils import Run, rlct_checkpoints
+from di_automata.train_utils import Run
 
 # CHANGE THESE  
 config_filename = "main_config"
@@ -33,9 +33,7 @@ def main(config: MainConfig) -> None:
     run = Run(omegaconf_config)
     run.train()
     run.finish_run()
-    
-    if config.llc_cp:
-        rlct_checkpoints(omegaconf_config)
+
 
 # def run_sweep():
 #     """Call main function using WandB syntax."""

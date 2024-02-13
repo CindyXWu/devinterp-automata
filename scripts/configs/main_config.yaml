@@ -14,6 +14,7 @@ num_training_iter: 300
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
 ema_decay: 0.9
 num_eval_batches: 20
+early_stop_patience: 3
 
 run_name: null
 is_wandb_enabled: false
