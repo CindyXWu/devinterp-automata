@@ -105,6 +105,7 @@ class Run:
 
                 self.optimizer.zero_grad()
                 loss = criterion(logits, labels.long())
+                detached_loss = loss.detach().cpu().item()
                 loss.backward()
                 self.optimizer.step()
                 
@@ -113,7 +114,7 @@ class Run:
                 if self.config.use_ema:
                     self.ema.update()
                     
-                train_loss.append(loss.item())
+                train_loss.append(detached_loss)
                 self.progress_bar.update()
                 
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
@@ -122,8 +123,8 @@ class Run:
                     iter_model_saved = True
                 
             # Early-stopping
-            if math.log(loss.item()) < math.log(best_loss):
-                best_loss = loss.item()
+            if math.log(detached_loss) < math.log(best_loss):
+                best_loss = detached_loss
                 no_improve_count = 0
             else:
                 no_improve_count += 1
@@ -152,7 +153,7 @@ class Run:
         
         # Concat all per-batch logits over batch dimension to form one super-batch
         logits_epoch = torch.cat(logits_epoch)
-        self.ed_logits.append(logits_epoch)
+        self.ed_logits.append(logits_epoch.cpu())
         
         
     def _ed_calculation(self) -> None:

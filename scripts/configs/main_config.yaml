@@ -76,7 +76,7 @@ rlct_config:
     elasticity: 1.0
     temperature: adaptive
     num_samples: 1 # True value set at run-time. This default value will throw an error in main code.
-    # bounding_box_size: 3
+    bounding_box_size: 0.5
   sgnht_kwargs:
     lr: 5e-7
     diffusion_factor: 0.01

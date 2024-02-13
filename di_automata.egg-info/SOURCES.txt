@@ -6,6 +6,7 @@ di_automata/config_setup.py
 di_automata/constructors.py
 di_automata/dataloader_utils.py
 di_automata/losses.py
+di_automata/slt_analysis.py
 di_automata/train_utils.py
 di_automata.egg-info/PKG-INFO
 di_automata.egg-info/SOURCES.txt
@@ -25,7 +26,6 @@ di_automata/devinterp/slt/__init__.py
 di_automata/devinterp/slt/callback.py
 di_automata/devinterp/slt/cov.py
 di_automata/devinterp/slt/gradient.py
-di_automata/devinterp/slt/learning_coeff.py
 di_automata/devinterp/slt/llc.py
 di_automata/devinterp/slt/loss.py
 di_automata/devinterp/slt/norms.py
