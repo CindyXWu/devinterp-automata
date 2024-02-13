@@ -53,6 +53,7 @@ wandb
 argparse
 pyYAML
 tqdm
+matplotlib-label-lines
 matplotlib
 plotnine
 scipy

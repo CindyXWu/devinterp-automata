@@ -4,9 +4,6 @@ from omegaconf import OmegaConf
 from scripts.create_sweep import load_config
 from di_automata.config_setup import MainConfig
 from di_automata.train_utils import Run, rlct_checkpoints
-from di_automata.config_setup import MainConfig
-
-import torch
 
 # CHANGE THESE  
 config_filename = "main_config"

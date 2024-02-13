@@ -6,7 +6,6 @@ from tqdm import tqdm
 import wandb
 import logging
 import os
-import gc
 import shutil
 from einops import rearrange
 import subprocess
@@ -23,9 +22,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from di_automata.devinterp.optim.sgld import SGLD
-from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
+    extract_and_save_rlct_data,
     plot_pca_plotly,
     plot_explained_var,
     plot_trace,
@@ -48,11 +47,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 
 class Run:
-    def __init__(
-        self, 
-        config: MainConfig,
-    ):
+    def __init__(self, config: MainConfig):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
         self.config = config
         
         self.train_loader = create_dataloader_hf(self.config, deterministic=False)
@@ -89,6 +86,8 @@ class Run:
         self.progress_bar = tqdm(total=self.config.num_training_iter)
         self.idx, self.epoch = 0, 0
         self.lr = self.config.optimizer_config.default_lr
+        no_improve_count = 0
+        best_loss = 0.0
         
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
@@ -121,11 +120,21 @@ class Run:
                     # self._save_model() # Save model but do not log other metrics at this frequency
                     iter_model_saved = True
                 
+                # Early-stopping
+                if torch.log(loss) < torch.log(best_loss):
+                    best_loss = loss
+                    no_improve_count = 0
+                else:
+                    no_improve_count += 1
+                if no_improve_count >= self.config.early_stop_patience:
+                    print(f"Early stopping: log loss has not decreased in {self.config.early_stop_patience} steps.")
+                    return
+                
             train_loss, train_acc = self._evaluation_step()
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
 
             if self.config.llc_train: self._rlct_training()
-
+            
             if not iter_model_saved: self._save_model()
         
     
@@ -152,8 +161,8 @@ class Run:
         pca.fit(concat_logit_matrix.cpu().numpy())
         
         projected_1, projected_2, projected_3 = [], [], []
-        for idx in range(self.idx // self.config.rlct_config.ed_config.eval_frequency):
-            logits_epoch = rearrange(self.ed_logits[idx], 'n -> 1 n').cpu().numpy()
+        for row in self.ed_logits:
+            logits_epoch = rearrange(row, 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
             projected_1.append(projected_vector[0])
             projected_2.append(projected_vector[1])
@@ -206,12 +215,9 @@ class Run:
         )
         
         sgld_results, callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=self.config.rlct_config.sgld_kwargs)
-        sgnht_results, callback_names = rlct_func(sampling_method=SGNHT, optimizer_kwargs=self.config.rlct_config.sgnht_kwargs)
-        
         sgld_results_filtered = extract_and_save_rlct_data(sgld_results, callback_names, sampler_type="sgld", idx=self.idx)
-        sgnht_results_filtered = extract_and_save_rlct_data(sgnht_results, callback_names, sampler_type="sgnht", idx=self.idx)
-        combined_results = sgld_results_filtered | sgnht_results_filtered
-        self.rlct_data_list.append(combined_results)
+            
+        self.rlct_data_list.append(sgld_results_filtered)
         
     
     def save_rlct(self) -> None:
@@ -254,7 +260,7 @@ class Run:
             with open(".hydra/config.yaml", "w") as file:
                 file.write(OmegaConf.to_yaml(self.config)) # Necessary: Hydra automatic config file does not include Pydantic run-time attributes and wrong thing will be logged and cause a nasty bug
             model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
-            wandb.log_artifact(model_artifact, aliases=[f"epoch{self.epoch}_{self.config.run_name}"])
+            wandb.log_artifact(model_artifact, aliases=[f"idx{self.idx}_{self.config.run_name}"])
             os.remove("states.torch") # Delete file to prevent clogging up
         else:
             file_path =  self.model_save_dir / f"{self.config.run_name}"
@@ -326,7 +332,7 @@ class Run:
         self.config = typing.cast(MainConfig, config)
         states = torch.load(model_state_path)
         
-        self.model_state_dict, optimizer_state_dict, scheduler_state_dict = states["model"], states["optimizer"], states["scheduler"]
+        self.model_state_dict, optimizer_state_dict, scheduler_state_dict, ema_state_dict = states["model"], states["optimizer"], states["scheduler"], states["ema"]
         
         if resume_training:
             # Only need below code if a) passing ref model in and doing deepcopy;
@@ -335,130 +341,9 @@ class Run:
             model.load_state_dict(self.model_state_dict)
             model.to(self.device)
             model.train()
-            self.model = torch.compile(model)
+            # self.model = torch.compile(model) # Not available on Windows
             self.optimizer.load_state_dict(optimizer_state_dict)
             self.scheduler.load_state_dict(scheduler_state_dict)
-                
-    
-def extract_and_save_rlct_data(
-    data: dict, 
-    callback_names: list[str], 
-    sampler_type: str, 
-    idx: int
-) -> dict:
-    log_dict = {}
-    return_dict = {}
-    # Always log mean and std
-    log_dict[f"{sampler_type}/mean"] = return_dict[f"{sampler_type}/mean"] = data["llc/mean"]
-    log_dict[f"{sampler_type}/std"] = return_dict[f"{sampler_type}/std"] = data["llc/std"]
-    
-    loss_p = plot_trace(data["loss/trace"], "loss")
-    loss_filename = f"{sampler_type}_loss.png"
-    loss_p.save(loss_filename, width=10, height=4, dpi=300)
-    log_dict[f"{sampler_type}/loss"] = wandb.Image(loss_filename)
-    
-    weight_norm_filename = "weight_norm.png"
-    noise_norm_filename = "noise_norm.png"
-    gradient_norm_filename = "gradient_norm.png"
-    
-    if 'OnlineWBCEstimator' in callback_names:
-        log_dict[f"{sampler_type}/wbic/means"] = data["wbic/means"]
-        log_dict[f"{sampler_type}/wbic/stds"] = data["wbic/stds"]
-        return_dict[f"{sampler_type}/wbic/means/mean"] = data["wbic/means"].mean().item()
-        return_dict[f"{sampler_type}/wbic/std/mean"] = data["wbic/stds"].mean().item()
-
-    if 'WeightNorm' in callback_names:
-        weight_norm_p = plot_trace(data["weight_norm/trace"], "weight norm")
-        return_dict[f"{sampler_type}/weight_norm/mean"] = data["weight_norm/trace"].mean().item()
-        weight_norm_p.save(weight_norm_filename, width=10, height=4, dpi=300)
-        log_dict["weight_norm"] = wandb.Image(weight_norm_filename)
-    
-    if 'NoiseNorm' in callback_names:
-        noise_norm_p = plot_trace(data["noise_norm/trace"], "noise norm")
-        return_dict[f"{sampler_type}/noise_norm/mean"] = data["noise_norm/trace"].mean().item()
-        noise_norm_p.save(noise_norm_filename, width=10, height=4, dpi=300)
-        log_dict["noise_norm"] = wandb.Image(noise_norm_filename)
-    
-    if 'GradientNorm' in callback_names:
-        gradient_norm_p = plot_trace(data["gradient_norm/trace"], "gradient norm")
-        return_dict[f"{sampler_type}/gradient_norm/mean"] = data["gradient_norm/trace"].mean().item()
-        gradient_norm_p.save(gradient_norm_filename, width=10, height=4, dpi=300)
-        log_dict["gradient_norm"] = wandb.Image(gradient_norm_filename)
-    
-    # TODO: additional metrics to be logged (e.g., GradientDistribution)
-    
-    wandb.log(log_dict, step=idx)
-    
-    for filename in [weight_norm_filename, gradient_norm_filename, noise_norm_filename]:
-        delete_file(filename)
-    
-    return return_dict
-
-
-def delete_file(filename: str):
-    if os.path.exists(filename):
-        os.remove(filename)
-    
-    
-def rlct_checkpoints(config: MainConfig) -> None:
-    """Estimate RLCTs from a set of checkpoints after training and dump on WandB.
-
-    Params:
-        run_name: Uniquely identifies model, used to save the RLCTs in a json file. 
-    """
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    
-    api = wandb.Api()
-    run_api = api.runs(
-        path=f"{config.wandb_config.entity_name}/{config.wandb_config.wandb_project_name}", 
-        filters={"display_name": f"{config.run_name}"},
-        order="created_at", # Default descending order
-    )[0]
-    run_id = run_api.id
-    wandb.init(entity=f"{config.wandb_config.entity_name}", project=f"{config.wandb_config.wandb_project_name}", id=run_id, resume="must")
-    
-    train_loader = create_dataloader_hf(config, deterministic=False)
-    
-    rlct_data_list: List[dict[str, float]] = []
-    rlct_folder = Path(__file__).parent / config.rlct_config.rlct_data_dir
-    rlct_folder.mkdir(parents=True, exist_ok=True)
-    rlct_criterion = construct_rlct_criterion(config)
-
-    for epoch in range(config.num_epochs):
-        artifact = api.artifact(f"{config.wandb_config.entity_name}/{config.wandb_config.wandb_project_name}/states:epoch{epoch}_{config.run_name}")
-        data_dir = artifact.download()
-        config_path = Path(data_dir) / "config.yaml"
-        model_state_path = Path(data_dir) / "states.torch"
-        config = OmegaConf.load(config_path)
-        config = typing.cast(MainConfig, config)
-        states = torch.load(model_state_path)
-        
-        model_state_dict = states["model"]
-        
-        rlct_func = partial(
-            estimate_learning_coeff_with_summary,
-            loader=train_loader,
-            criterion=rlct_criterion,
-            main_config=config,
-            checkpoint=model_state_dict,
-            device=device,
-        )
-
-        sgld_results, sgld_callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=config.rlct_config.sgld_kwargs)
-        sgnht_results, sgnht_callback_names = rlct_func(sampling_method=SGNHT, optimizer_kwargs=config.rlct_config.sgnht_kwargs)
-        
-        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, sgld_callback_names, sampler_type="sgld", idx=epoch*config.eval_frequency)
-        sgnht_results_filtered = extract_and_save_rlct_data(sgnht_results, sgnht_callback_names, sampler_type="sgnht", idx=epoch*config.eval_frequency)
-        combined_results = sgld_results_filtered | sgnht_results_filtered # Python 3.9+
-        rlct_data_list.append(combined_results)
-        
-    rlct_df = pd.DataFrame(rlct_data_list)
-    rlct_df.to_csv(rlct_folder / f"{config.run_name}.csv")
-    rlct_artifact = wandb.Artifact(f"rlct", type="rlct", description="RLCT diagnostics.")
-    rlct_artifact.add_file(rlct_folder / f"{config.run_name}.csv")
-    wandb.log_artifact(rlct_artifact, aliases=[f"rlct_{config.run_name}"])
-    
-    wandb.finish()
 
            
 @torch.no_grad()

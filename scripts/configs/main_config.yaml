@@ -5,8 +5,9 @@ model_type: NANO_GPT
 parameterisation: MUP
 
 llc_train: false
-ed_train: true
+ed_train: false
 llc_cp: false
+ed_cp: true
 use_ema: True
 
 num_training_iter: 300
@@ -20,7 +21,7 @@ num_epochs: null
 
 optimizer_config:
   optimizer_type: ADAMW
-  default_lr: 3e-3
+  default_lr: 5e-3
   final_lr: 5e-4
   global_lr: 1.0
   optimizer_kwargs: {}
@@ -69,12 +70,12 @@ rlct_config:
 
   sgld_kwargs:
     lr: 5e-7
-    noise_level: 0.1
+    noise_level: 1.0
     weight_decay: 5e-8
-    elasticity: 10
+    elasticity: 1.0
     temperature: adaptive
     num_samples: 1 # True value set at run-time. This default value will throw an error in main code.
-    bounding_box_size: 0.5
+    # bounding_box_size: 3
   sgnht_kwargs:
     lr: 5e-7
     diffusion_factor: 0.01

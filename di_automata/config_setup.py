@@ -207,7 +207,7 @@ class ABABAutomatonConfig(BinaryInputAutomatonConfig):
     @property
     def output_vocab_size(self):
         match self.label_type:
-            case ABABAutomatonConfig.Label.STATE: return 5 # Predict [0...4] (see init of ABABAutomaton)
+            case ABABAutomatonConfig.Label.STATE: return 5 # Predict [0,...,4] (see ABABAutomaton)
             case ABABAutomatonConfig.Label.BOUNDARY: return 2
 
 
@@ -481,11 +481,14 @@ class MainConfig(BaseModel):
     llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
     llc_cp: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
     ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
+    ed_cp: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
     use_ema: bool = Field(default=True, description="Whether to use exponential moving average of model parameters.")
     ema_decay: float = Field(default=0.9, description="Decay factor for EMA.")
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
     num_eval_batches: Optional[int] = Field(default=20)
+    early_stop_patience: Optional[int] = Field(default=5, description="Number of evaluation steps with no improvement in log loss before stopping.")
+    early_stop_smoothing_window: Optional[int] = Field(default=5, description="Size of moving average window to smooth out loss.")
     
     # Set by validator
     run_name: Optional[str]
