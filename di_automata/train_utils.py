@@ -7,6 +7,7 @@ import wandb
 import logging
 import os
 import shutil
+import contextlib
 from einops import rearrange
 import subprocess
 from omegaconf import OmegaConf
@@ -189,7 +190,10 @@ class Run:
     
     def _del_wandb_cache(self):
         command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except:
+            print("Cache file deletion skipped.")
             
         for cache_dir in self.wandb_cache_dirs:
             if cache_dir.is_dir():
@@ -253,12 +257,15 @@ class Run:
 
 
     def _save_model(self) -> None:
-        model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
-        state = get_state_dict(model_to_save, self.optimizer, self.scheduler, self.ema)
-        torch.save(
-            state, # Save optimizer, model and scheduler all in one go
-            Path(".") / "states.torch", # Working directory configured by Hydra as output directory
-        )
+        context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
+        # Saving moving average weights in state dict
+        with context_manager:
+            model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+            state = get_state_dict(model_to_save, self.optimizer, self.scheduler, self.ema)
+            torch.save(
+                state, # Save optimizer, model and scheduler all in one go
+                Path(".") / "states.torch", # Working directory configured by Hydra as output directory
+            )
         
         if self.config.wandb_config.save_model_as_artifact is True:
             model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
@@ -366,7 +373,7 @@ def evaluate(
     """"
     Args:
         num_eval_batches: If we aren't evaluating on the whole dataloader, then do on this many batches.
-        ema: EMA object whose average_parameters() context is used for model evaluation.
+        ema: EMA object whose average_parameters() context is used for model evaluation. If no EMA, then this object should be None.
     Returns:
         accuracy: Average percentage accuracy on batch.
         loss: Average loss on batch.
@@ -375,7 +382,9 @@ def evaluate(
     total_accuracy = 0.
     total_loss = 0.
 
-    with ema.average_parameters():
+    context_manager = ema.average_parameters() if ema else no_op_context()
+    # Saving moving average weights in state dict
+    with context_manager:
         for data in take_n(data_loader, num_eval_batches):
             inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
             outputs = model(inputs)
@@ -399,3 +408,8 @@ def update_with_wandb_config(config: OmegaConf, sweep_params: list[str]) -> Omeg
             print("Updating param with value from wandb config: ", param)
             OmegaConf.update(config, param, wandb.config[param], merge=True)
     return config
+
+
+@contextlib.contextmanager
+def no_op_context():
+    yield

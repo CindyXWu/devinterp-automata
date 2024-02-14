@@ -157,7 +157,7 @@ def extract_and_save_rlct_data(
     noise_norm_filename = "noise_norm.png"
     gradient_norm_filename = "gradient_norm.png"
     
-    if 'OnlineWBCEstimator' in callback_names:
+    if 'OnlineWBICEstimator' in callback_names:
         log_dict[f"{sampler_type}/wbic/means"] = data["wbic/means"]
         log_dict[f"{sampler_type}/wbic/stds"] = data["wbic/stds"]
         return_dict[f"{sampler_type}/wbic/means/mean"] = data["wbic/means"].mean().item()

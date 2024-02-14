@@ -62,6 +62,7 @@ class SGLD(torch.optim.Optimizer):
         num_samples: int,
         temperature: Union[Literal["adaptive"], float] = "adaptive",
         bounding_box_size: Optional[float] = None,
+        **kwargs,
     ):
         defaults = dict(
             lr=lr,
