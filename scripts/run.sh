@@ -15,20 +15,20 @@ llc_cp="False"
 ed_cp="False"
 
 # Hyperparams
-lrs=(1e-4)
-final_lrs=(5e-5)
+lrs=(5e-4)
+final_lrs=(1e-4)
 its=14000
 eval_f=100
 layers=4
 seq_len=25
 bs=32
-patience=4
+patience=8
 
 # RLCT
 sampler="SGLD"
 chains=10
 ed_eval_f=10
-rlct_lr="1e-8,5e-8,1e-7,5e-7,1e-6"
+rlct_lr="1e-9,1e-8,1e-7,1e-6"
 elasticity="1,10,50,100"
 sigma="0.25,1.0"
 # rlct_lr=3e-7

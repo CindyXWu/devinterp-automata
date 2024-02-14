@@ -1,4 +1,4 @@
-from typing import Literal, Union
+from typing import Literal, Union, Optional
 
 import numpy as np
 import torch
@@ -55,13 +55,13 @@ class SGLD(torch.optim.Optimizer):
     def __init__(
         self,
         params,
-        lr=1e-3,
-        noise_level=1.0,
-        weight_decay=0.0,
-        elasticity=0.0,
+        lr: float,
+        noise_level: float,
+        weight_decay: float,
+        elasticity: float,
+        num_samples: int,
         temperature: Union[Literal["adaptive"], float] = "adaptive",
-        bounding_box_size=None,
-        num_samples=1,
+        bounding_box_size: Optional[float] = None,
     ):
         defaults = dict(
             lr=lr,

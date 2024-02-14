@@ -15,6 +15,7 @@ from sklearn.decomposition import PCA
 import pandas as pd
 import subprocess
 import math
+import time
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -22,7 +23,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
     extract_and_save_rlct_data,
@@ -122,18 +122,18 @@ class Run:
                     # self._save_model() # Save model but do not log other metrics at this frequency
                     iter_model_saved = True
                 
+            train_loss, train_acc = self._evaluation_step()
+            self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
+            
             # Early-stopping
-            if math.log(detached_loss) < math.log(best_loss):
-                best_loss = detached_loss
+            if math.log(train_loss) < math.log(best_loss):
+                best_loss = train_loss
                 no_improve_count = 0
             else:
                 no_improve_count += 1
-            if no_improve_count >= self.config.early_stop_patience:
+            if no_improve_count >= self.config.early_stop_patience or train_acc > self.config.early_stop_acc_threshold:
                 print(f"Early stopping: log loss has not decreased in {self.config.early_stop_patience} steps.")
                 return
-                
-            train_loss, train_acc = self._evaluation_step()
-            self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
 
             if self.config.llc_train: self._rlct_training()
             
@@ -182,6 +182,8 @@ class Run:
         logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
         logit_artifact.add_file("logits", name="logits_artifact")
         wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}"])
+        if os.path.exists("logits"): # Delete logits as these can take up to 30GB of storage
+            os.remove("logits")
         self._del_wandb_cache()
     
     
@@ -216,10 +218,12 @@ class Run:
             device=self.device,
         )
         
-        sgld_results, callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=self.config.rlct_config.sgld_kwargs)
-        sgld_results_filtered = extract_and_save_rlct_data(sgld_results, callback_names, sampler_type="sgld", idx=self.idx)
-            
-        self.rlct_data_list.append(sgld_results_filtered)
+        results, callback_names = rlct_func(
+            sampling_method=rlct_class_map[self.config.rlct_config.sampling_method], 
+            optimizer_kwargs=self.config.rlct_config.sgld_kwargs
+        )
+        results_filtered = extract_and_save_rlct_data(results, callback_names, sampler_type=self.config.rlct_config.sampling_method.lower(), idx=self.idx)    
+        self.rlct_data_list.append(results_filtered)
         
     
     def save_rlct(self) -> None:
@@ -318,6 +322,8 @@ class Run:
         upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
         if upload_cache_dir.is_dir():
             shutil.rmtree(upload_cache_dir)
+        
+        time.sleep(60)
         shutil.rmtree("wandb")
         
     
@@ -346,6 +352,7 @@ class Run:
             # self.model = torch.compile(model) # Not available on Windows
             self.optimizer.load_state_dict(optimizer_state_dict)
             self.scheduler.load_state_dict(scheduler_state_dict)
+            self.ema.load_state_dict(ema_state_dict)
 
            
 @torch.no_grad()

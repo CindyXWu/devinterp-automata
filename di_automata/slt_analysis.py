@@ -1,12 +1,9 @@
 import wandb
-from pathlib import Path
-from di_automata.config_setup import *
-
 from typing import TypeVar
 from pathlib import Path
-import wandb
 from functools import partial
 import shutil
+import time
 from einops import rearrange
 from sklearn.decomposition import PCA
 import pandas as pd
@@ -20,14 +17,12 @@ from di_automata.devinterp.rlct_utils import (
     extract_and_save_rlct_data,
     plot_pca_plotly,
     plot_explained_var,
-    plot_trace,
 )
 from di_automata.config_setup import *
 from di_automata.constructors import (
     construct_model, 
     create_dataloader_hf,
     construct_rlct_criterion,
-    get_state_dict,
 )
 Sweep = TypeVar("Sweep")
 
@@ -169,9 +164,12 @@ class PostRunSLT:
                 device=self.device,
             )
 
-            sgld_results, sgld_callback_names = rlct_func(sampling_method=SGLD, optimizer_kwargs=self.config.rlct_config.sgld_kwargs)
-            sgld_results_filtered = extract_and_save_rlct_data(sgld_results, sgld_callback_names, sampler_type="sgld", idx=epoch*self.config.eval_frequency)
-            self.rlct_data_list.append(sgld_results_filtered)
+            results, callback_names = rlct_func(
+            sampling_method=rlct_class_map[self.config.rlct_config.sampling_method], 
+            optimizer_kwargs=self.config.rlct_config.sgld_kwargs
+            )
+            results_filtered = extract_and_save_rlct_data(results, callback_names, sampler_type=self.config.rlct_config.sampling_method.lower(), idx=epoch*self.config.eval_frequency)
+            self.rlct_data_list.append(results_filtered)
             
         rlct_df = pd.DataFrame(self.rlct_data_list)
         rlct_df.to_csv(rlct_folder / f"{self.config.run_name}.csv")
@@ -186,4 +184,6 @@ class PostRunSLT:
         upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
         if upload_cache_dir.is_dir():
             shutil.rmtree(upload_cache_dir)
+            
+        time.sleep(60)
         shutil.rmtree("wandb")

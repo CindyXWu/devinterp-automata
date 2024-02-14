@@ -18,7 +18,6 @@ from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import MainConfig, RLCTConfig
 from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.optim.sgld_ma import SGLD_MA
-from di_automata.devinterp.optim.sgnht import SGNHT
 from di_automata.constructors import construct_model
 from di_automata.losses import predictive_kl_loss
 from di_automata.devinterp.slt.callback import SamplerCallback
@@ -112,6 +111,7 @@ def sample_single_chain(
     model.train()
 
     if config.use_distill_loss:
+        print("Using distill loss")
         baseline_model, _ = construct_model(main_config)
         baseline_model.load_state_dict(checkpoint)
         baseline_model = baseline_model.to(device)
@@ -127,32 +127,30 @@ def sample_single_chain(
         inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
         logits = model(inputs)
         
-        def closure(backward=True):
+        def closure(backward=False):
             """
             Compute loss for current state of model and update gradients.
             
             Args:
-                backward: Whether to perform backward pass. Only used for updating weight grad at proposed location. See SGLD_MA.step() for more details.
+                backward: Whether to perform backward pass. Only used for updating weight grad at proposed location. 
+                See SGLD_MA.step() for more details.
             """
-            outputs = model(inputs)
-            loss = criterion(outputs, logits)
+            logits = model(inputs)
+            loss, student_logits = predictive_kl_loss(x=inputs, y=labels, teacher_model=baseline_model, student_model=model) if config.use_distill_loss else criterion(logits, labels)
             if backward:
                 optimizer.zero_grad() 
                 loss.backward()
             return loss
         
-        if config.use_distill_loss:
-            loss, student_logits = predictive_kl_loss(x=inputs, y=labels, teacher_model=baseline_model, student_model=model)
-        else:
-            loss = criterion(logits, labels)
-
+        loss, student_logits = predictive_kl_loss(x=inputs, teacher_model=baseline_model, student_model=model) if config.use_distill_loss else criterion(logits, labels)
         optimizer.zero_grad()
         loss.backward()
         
-        if sampling_method in [SGLD, SGNHT]:
+        if sampling_method in [SGLD]:
             optimizer.step(closure=None)
         elif sampling_method in [SGLD_MA]:
             optimizer.step(closure=closure)
+            acceptance_ratio = optimizer.acceptance_ratio # required for locals()
 
         if i >= config.num_burnin_steps and (i - config.num_burnin_steps) % config.num_steps_bw_draws == 0:
             draw = (i - config.num_burnin_steps) // config.num_steps_bw_draws  # required for locals()
@@ -165,7 +163,7 @@ def sample_single_chain(
                     call_with(callback, **locals())  # Cursed. This is the way. 
         
         progress_bar.update()
-        progress_bar.set_description(f"Chain {chain}, sampler {config.sampling_method}")
+        progress_bar.set_description(f"Chain {chain}, sampler {config.sampling_method}, accept ratio {acceptance_ratio}")
 
 
 def _sample_single_chain(kwargs):

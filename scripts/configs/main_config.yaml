@@ -4,17 +4,18 @@ defaults:
 model_type: NANO_GPT
 parameterisation: MUP
 
-llc_train: false
+llc_train: true
 ed_train: false
 llc_cp: false
 ed_cp: true
 use_ema: True
 
-num_training_iter: 300
+num_training_iter: 1000
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
 ema_decay: 0.9
 num_eval_batches: 20
-early_stop_patience: 3
+early_stop_patience: 10
+early_stop_acc_threshold: 99.9
 
 run_name: null
 is_wandb_enabled: false
@@ -50,11 +51,10 @@ nano_gpt_config:
   bias: true
 
 rlct_config:
-  sampling_method: SGLD
+  sampling_method: SGLD_MA
   rlct_loss_type: ce # When not using distill kl loss
-  sigma: 0.25
   num_samples: null # Set by validator
-  num_chains: 3
+  num_chains: 5
   num_draws: 100
   num_burnin_steps: 0 
   num_steps_bw_draws: 1
@@ -70,20 +70,17 @@ rlct_config:
   save_results: true
 
   sgld_kwargs:
-    lr: 5e-7
-    noise_level: 1.0
-    weight_decay: 5e-8
-    elasticity: 1.0
+    lr: 5e-8
+    noise_level: 0.5
+    weight_decay: 3e-8
+    elasticity: 10
     temperature: adaptive
     num_samples: 1 # True value set at run-time. This default value will throw an error in main code.
     bounding_box_size: 0.5
-  sgnht_kwargs:
-    lr: 5e-7
-    diffusion_factor: 0.01
-    bounding_box_size: 0.5
-    num_samples: 1 # True value set at run-time. This default value will throw an error in main code.
+    mh_frequency: 5
+
   ed_config:
-    batches_per_checkpoint: 200
+    batches_per_checkpoint: 300
     eval_frequency: 10
 
   rlct_model_save_dir: null

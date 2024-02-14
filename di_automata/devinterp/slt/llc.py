@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Optional
 
 import torch
 
@@ -24,6 +24,8 @@ class LLCEstimator(SamplerCallback):
         self.num_chains = num_chains
         self.num_draws = num_draws
         self.losses = torch.zeros((num_chains, num_draws), dtype=torch.float32).to(device)
+        self.acceptance_ratio = 0
+        self.mh_count = 0
 
         self.n = torch.tensor(n, dtype=torch.float32).to(device)
         self.llc_per_chain = torch.zeros(num_chains, dtype=torch.float32).to(device)
@@ -32,8 +34,10 @@ class LLCEstimator(SamplerCallback):
 
         self.device = device
 
-    def update(self, chain: int, draw: int, loss: float):
-        self.losses[chain, draw] = loss 
+    def update(self, chain: int, draw: int, loss: float, acceptance_ratio: Optional[float]):
+        self.losses[chain, draw] = loss
+        self.acceptance_ratio += acceptance_ratio
+        self.mh_count += 1
 
     @property
     def init_loss(self):
@@ -51,11 +55,12 @@ class LLCEstimator(SamplerCallback):
             "llc/std": self.llc_std.cpu().numpy().item(),
             **{f"llc-chain/{i}": self.llc_per_chain[i].cpu().numpy().item() for i in range(self.num_chains)},
             "loss/trace": self.losses.cpu().numpy(),
+            "accept_ratio/mean": self.acceptance_ratio / self.mh_count if self.mh_count > 0 else None,
         }
     
-    def __call__(self, chain: int, draw: int, loss: float):
+    def __call__(self, chain: int, draw: int, loss: float, acceptance_ratio: Optional[float]):
         """Pythonic: allow class member to behave as function."""
-        self.update(chain, draw, loss)
+        self.update(chain, draw, loss, acceptance_ratio)
         
 
 class OnlineLLCEstimator(SamplerCallback):

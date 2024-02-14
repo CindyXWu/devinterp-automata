@@ -3,6 +3,9 @@ from enum import Enum
 from abc import abstractmethod
 from typing import Any, Optional, List, Union
 import math
+
+from di_automata.devinterp.optim.sgld import SGLD
+from di_automata.devinterp.optim.sgld_ma import SGLD_MA
     
 
 class ModelType(str, Enum):
@@ -390,14 +393,6 @@ class PermutationResetAutomatonConfig(DatasetConfig):
 class RLCTSamplerType(str, Enum):
     SGLD = "SGLD"
     SGLD_MA = "SGLD_MA"
-    SGNHT = "SGNHT"
-
-
-class SGNHT_Kwargs(BaseModel):
-    lr: float
-    diffusion_factor: float
-    bounding_box_size: float = Field(default=None, description="If set, prevents LLC estimator chain from wandering too far.")
-    num_samples: int
 
 
 class SGLD_Kwargs(BaseModel):
@@ -408,6 +403,7 @@ class SGLD_Kwargs(BaseModel):
     bounding_box_size: float = Field(default=None, description="If set, prevents LLC estimator chain from wandering too far.")
     temperature: str = Field(default="adaptive", description="If adaptive, calculate temperature using number of samples seen, given by num_samples.")
     num_samples: int
+    mh_frequency: int = Field(default=20, description="How many steps to take between metropolis-hastings acceptance ratio calculations as a diagnostic for SGLD.")
 
 
 class EssentialDynamicsConfig(BaseModel):
@@ -418,7 +414,6 @@ class EssentialDynamicsConfig(BaseModel):
 class RLCTConfig(BaseModel):
     rlct_loss_type: RLCTLossType
     sampling_method: RLCTSamplerType = Field(default=None, description="Value in config only used if the sampler type is not specified when called locally in code. This allows multiple samplers to be used at once.")
-    sigma: float
     num_chains: int = Field(default=10)
     num_draws: int = Field(default=100)
     num_samples: int = Field(default=None, description="Total unique samples seen during RLCT sampling = min(unique datapoints in dataset as defined by task config, datapoints seen based on num_draws and num steps bw draws). Set by root validator.")
@@ -439,7 +434,6 @@ class RLCTConfig(BaseModel):
     
     # Other configs
     sgld_kwargs: Optional[SGLD_Kwargs]
-    sgnht_kwargs: Optional[SGNHT_Kwargs]
     ed_config: Optional[EssentialDynamicsConfig]
     
     # Saving
@@ -489,6 +483,7 @@ class MainConfig(BaseModel):
     num_eval_batches: Optional[int] = Field(default=20)
     early_stop_patience: Optional[int] = Field(default=5, description="Number of evaluation steps with no improvement in log loss before stopping.")
     early_stop_smoothing_window: Optional[int] = Field(default=5, description="Size of moving average window to smooth out loss.")
+    early_stop_acc_threshold: Optional[int] = Field(default=99.9, description="Percent accuracy to immediately stop training at.")
     
     # Set by validator
     run_name: Optional[str]
@@ -536,7 +531,7 @@ class MainConfig(BaseModel):
         # Set total number of unique samples seen (n)
         v["rlct_config"]["num_samples"] = min( (rlct_config["num_draws"] * rlct_config["num_steps_bw_draws"] + rlct_config["num_burnin_steps"]) * v["dataloader_config"]["train_bs"], task_config_instance.vocab_size**task_config_instance.length)
         # Copy num samples to sampler kwargs for easy initialisation in main code. Be careful if this is not done it will break LLC estimator.
-        v["rlct_config"]["sgld_kwargs"]["num_samples"] = v["rlct_config"]["sgnht_kwargs"]["num_samples"] = v["rlct_config"]["num_samples"]
+        v["rlct_config"]["sgld_kwargs"]["num_samples"] = v["rlct_config"]["num_samples"]
         # Burnin not implemented yet
         assert rlct_config.num_burnin_steps == 0, 'Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.'
         
@@ -555,4 +550,10 @@ config_class_map = {
     "quaternion": QuaternionAutomatonConfig,
     "permutation_reset": PermutationResetAutomatonConfig,
     "symmetric": SymmetricAutomatonConfig,
+}
+
+
+rlct_class_map = {
+    "SGLD": SGLD,
+    "SGLD_MA": SGLD_MA
 }

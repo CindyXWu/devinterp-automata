@@ -144,6 +144,9 @@ def extract_and_save_rlct_data(
     # Always log mean and std
     log_dict[f"{sampler_type}/mean"] = return_dict[f"{sampler_type}/mean"] = data["llc/mean"]
     log_dict[f"{sampler_type}/std"] = return_dict[f"{sampler_type}/std"] = data["llc/std"]
+    if "accept_ratio/mean" in data.keys():
+        log_dict[f"{sampler_type}/accept_ratio"] = data["accept_ratio/mean"]
+        return_dict[f"{sampler_type}/accept_ratio"] = data["accept_ratio/mean"]
     
     loss_p = plot_trace(data["loss/trace"], "loss")
     loss_filename = f"{sampler_type}_loss.png"
