@@ -136,13 +136,19 @@ def sample_single_chain(
                 See SGLD_MA.step() for more details.
             """
             logits = model(inputs)
-            loss, student_logits = predictive_kl_loss(x=inputs, y=labels, teacher_model=baseline_model, student_model=model) if config.use_distill_loss else criterion(logits, labels)
+            if config.use_distill_loss:
+                loss, student_logits = predictive_kl_loss(x=inputs, y=labels, teacher_model=baseline_model, student_model=model)
+            else:
+                loss = criterion(logits, labels)
             if backward:
                 optimizer.zero_grad() 
                 loss.backward()
             return loss
         
-        loss, student_logits = predictive_kl_loss(x=inputs, teacher_model=baseline_model, student_model=model) if config.use_distill_loss else criterion(logits, labels)
+        if config.use_distill_loss:
+                loss, student_logits = predictive_kl_loss(x=inputs, y=labels, teacher_model=baseline_model, student_model=model)
+        else:
+            loss = criterion(logits, labels)
         optimizer.zero_grad()
         loss.backward()
         

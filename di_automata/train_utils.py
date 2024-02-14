@@ -120,7 +120,7 @@ class Run:
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
                     self._ed_data_training()
                     # self._save_model() # Save model but do not log other metrics at this frequency
-                    iter_model_saved = True
+                    # iter_model_saved = True
                 
             train_loss, train_acc = self._evaluation_step()
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
