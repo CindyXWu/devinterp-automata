@@ -34,7 +34,7 @@ class LLCEstimator(SamplerCallback):
 
         self.device = device
 
-    def update(self, chain: int, draw: int, loss: float, acceptance_ratio: Optional[float]):
+    def update(self, chain: int, draw: int, loss: float, acceptance_ratio: Optional[float] = None):
         self.losses[chain, draw] = loss
         self.acceptance_ratio += acceptance_ratio
         self.mh_count += 1
@@ -58,7 +58,7 @@ class LLCEstimator(SamplerCallback):
             "accept_ratio/mean": self.acceptance_ratio / self.mh_count if self.mh_count > 0 else None,
         }
     
-    def __call__(self, chain: int, draw: int, loss: float, acceptance_ratio: Optional[float]):
+    def __call__(self, chain: int, draw: int, loss: float, acceptance_ratio: Optional[float] = None):
         """Pythonic: allow class member to behave as function."""
         self.update(chain, draw, loss, acceptance_ratio)
         

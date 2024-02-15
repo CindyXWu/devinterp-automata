@@ -421,7 +421,6 @@ class RLCTConfig(BaseModel):
     num_steps_bw_draws: int = Field(default=1)
     
     # Meta
-    batch_size: int
     cores: int = Field(default=1)
     seed: Optional[Union[int, List[int]]] = Field(default=[None], description="Can be int or list of ints. Example: 1234 or [1234, 5678]. Must be same length as number of chains.")
     
@@ -430,7 +429,6 @@ class RLCTConfig(BaseModel):
     online: bool = Field(default=False)
     use_distill_loss: bool
     use_diagnostics: bool = Field(default=True, description="Whether to include norm, WBIC, gradient and loss diagnostics for RLCT estimation.")
-    save_results: bool
     
     # Other configs
     sgld_kwargs: Optional[SGLD_Kwargs]
