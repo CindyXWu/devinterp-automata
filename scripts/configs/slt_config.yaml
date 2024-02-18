@@ -1,0 +1,50 @@
+model_type: NANO_GPT
+dataset_type: 'adder'
+
+lr: 1e-4
+num_training_iter: 14000
+early_stop_patience: 10
+early_stop_smoothing_window: 5
+early_stop_acc_threshold: 99.9
+truncate_its: 230 # Set to None if you want to automatically truncate using above settings
+
+n_layers: 3
+seq_len: 25
+
+wandb_project_name: devinterp-automata
+entity_name: wu-cindyx
+
+llc: true
+ed: true
+
+rlct_config:
+  sampling_method: SGLD_MA
+  rlct_loss_type: ce # When not using distill kl loss
+  num_chains: 5
+  num_draws: 5000
+  num_burnin_steps: 0 
+  num_steps_bw_draws: 1
+  cores: 1
+  seed: null
+
+  use_diagnostics: true
+  online: false
+  verbose: true
+  use_distill_loss: true
+
+  ed_config:
+    batches_per_checkpoint: 300
+    eval_frequency: 10
+
+  sgld_kwargs:
+    lr: 5e-8
+    noise_level: 1.0
+    weight_decay: 5e-8
+    elasticity: 10
+    temperature: adaptive
+    num_samples: 10000 # True value set at run-time.
+    bounding_box_size: 0.5
+    mh_frequency: 10
+
+  rlct_model_save_dir: null
+  rlct_data_dir: null

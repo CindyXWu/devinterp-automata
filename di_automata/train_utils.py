@@ -14,7 +14,6 @@ from omegaconf import OmegaConf
 from functools import partial
 from sklearn.decomposition import PCA
 import pandas as pd
-import subprocess
 import math
 import time
 from torch_ema import ExponentialMovingAverage
@@ -79,6 +78,9 @@ class Run:
         self.ed_logits = []
         
         self._set_logger()
+        
+        # Now that WandB run is initialised, save config as artifact
+        self._save_config()
     
     
     def train(self) -> None:
@@ -100,7 +102,7 @@ class Run:
             for data in take_n(self.train_loader, self.num_iter): # Compatible with HF dataset format where data is a dictionary
                 # all_idxs is a list of idxs (not useful)
                 iter_model_saved = False
-                self.idx += 1
+                self.idx += 1 # TODO: move this to end of loop for easier analysis indexing (always log step 0)
                 inputs, labels = data["input_ids"].to(self.device), data["label_ids"].to(self.device)
                 logits = self.model(inputs)
 
@@ -186,22 +188,6 @@ class Run:
         if os.path.exists("logits"): # Delete logits as these can take up to 30GB of storage
             os.remove("logits")
         self._del_wandb_cache()
-    
-    
-    def _del_wandb_cache(self):
-        command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
-        try:
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except:
-            print("Cache file deletion skipped.")
-            
-        for cache_dir in self.wandb_cache_dirs:
-            if cache_dir.is_dir():
-                try: 
-                    shutil.rmtree(cache_dir)
-                    print(f"Removed {cache_dir}")
-                except OSError as e: 
-                    print(f"Failed to remove dir {cache_dir}.", e)
 
             
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
@@ -230,7 +216,7 @@ class Run:
         self.rlct_data_list.append(results_filtered)
         
     
-    def save_rlct(self) -> None:
+    def _save_rlct(self) -> None:
         rlct_df = pd.DataFrame(self.rlct_data_list)
         rlct_df.to_csv(self.rlct_folder / f"{self.config.run_name}.csv")
         rlct_artifact = wandb.Artifact(f"rlct_distill_{self.config.rlct_config.use_distill_loss}", type="rlct", description="RLCT mean and std for all samplers used.")
@@ -256,6 +242,15 @@ class Run:
         return train_loss, train_acc
 
 
+    def _save_config(self) -> None:
+        """Only called once to prevent saving config multiple times."""
+        model_artifact = wandb.Artifact(f"config", type="config", description="Config after run-time attributes filled in.")
+        with open(".hydra/config.yaml", "w") as file:
+            file.write(OmegaConf.to_yaml(self.config)) # Necessary: Hydra automatic config file does not include Pydantic run-time attributes and wrong thing will be logged and cause a nasty bug
+        model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
+        wandb.log_artifact(model_artifact, aliases=[f"{self.config.run_name}"])
+            
+            
     def _save_model(self) -> None:
         context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
         # Saving moving average weights in state dict
@@ -270,9 +265,6 @@ class Run:
         if self.config.wandb_config.save_model_as_artifact is True:
             model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
             model_artifact.add_file(f"states.torch")
-            with open(".hydra/config.yaml", "w") as file:
-                file.write(OmegaConf.to_yaml(self.config)) # Necessary: Hydra automatic config file does not include Pydantic run-time attributes and wrong thing will be logged and cause a nasty bug
-            model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
             wandb.log_artifact(model_artifact, aliases=[f"idx{self.idx}_{self.config.run_name}"])
             os.remove("states.torch") # Delete file to prevent clogging up
         else:
@@ -304,7 +296,7 @@ class Run:
             "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
             "mode": "disabled" if not self.config.is_wandb_enabled else "online",
         }
-        self.run = wandb.init(**logger_params, entity="wu-cindyx")
+        self.run = wandb.init(**logger_params, entity=self.config.wandb_config.entity_name)
         # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
         wandb.config.dataset_type = self.config.task_config.dataset_type
         wandb.config.model_type = self.config.model_type
@@ -314,7 +306,7 @@ class Run:
         """We also have "root/.local/share/wandb/artifacts", but this can't be deleted as often as doing so prevents proper upload of model checkpoints. Delete in finish_run() below."""
         
         
-    def finish_run(self):
+    def finish_run(self) -> None:
         """Clean up last RLCT calculation, save data, finish WandB run and delete large temporary folders.
         
         We define an extra cache dir to be removed at end of run here.
@@ -322,22 +314,38 @@ class Run:
         if self.config.ed_train: 
             self._ed_calculation()
         if self.config.llc_train:
-            self.save_rlct()
+            self._save_rlct()
         if self.config.is_wandb_enabled:
             wandb.finish()
             
-        upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
-        if upload_cache_dir.is_dir():
-            shutil.rmtree(upload_cache_dir)
-        
-        time.sleep(60)
-        shutil.rmtree("wandb")
+            upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
+            if upload_cache_dir.is_dir():
+                shutil.rmtree(upload_cache_dir)
+            
+            time.sleep(60)
+            shutil.rmtree("wandb")
         
     
-    def restore_model(self, resume_training: bool = False) -> None:
+    def _del_wandb_cache(self):
+        command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
+        try:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except:
+            print("Cache file deletion skipped.")
+            
+        for cache_dir in self.wandb_cache_dirs:
+            if cache_dir.is_dir():
+                try: 
+                    shutil.rmtree(cache_dir)
+                    print(f"Removed {cache_dir}")
+                except OSError as e: 
+                    print(f"Failed to remove dir {cache_dir}.", e)
+                    
+                    
+    def _restore_model(self, resume_training: bool = False) -> None:
         """Restore from a checkpoint on WandB.
         
-        Currently not in use and needs updating for EMA.
+        TODO: Currently not in use and needs updating for EMA.
         """
         artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:epoch{self.epoch}_{self.config.run_name}")
         data_dir = artifact.download()

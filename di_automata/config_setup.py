@@ -471,16 +471,13 @@ class MainConfig(BaseModel):
     
     ## Training bits and bobs
     llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
-    llc_cp: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
     ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
-    ed_cp: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
     use_ema: bool = Field(default=True, description="Whether to use exponential moving average of model parameters.")
     ema_decay: float = Field(default=0.9, description="Decay factor for EMA.")
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
     num_eval_batches: Optional[int] = Field(default=20)
-    early_stop_patience: Optional[int] = Field(default=5, description="Number of evaluation steps with no improvement in log loss before stopping.")
-    early_stop_smoothing_window: Optional[int] = Field(default=5, description="Size of moving average window to smooth out loss.")
+    early_stop_patience: Optional[int] = Field(default=10, description="Number of evaluation steps with no improvement in log loss before stopping.")
     early_stop_acc_threshold: Optional[float] = Field(default=99.9, description="Percent accuracy to immediately stop training at.")
     
     # Set by validator
@@ -521,21 +518,65 @@ class MainConfig(BaseModel):
         
         # Adjust RLCT parameters
         rlct_config = v["rlct_config"]
-        # Set save folder name
-        if not v["rlct_config"]["use_distill_loss"]:
+        # Save folder name
+        if not rlct_config["use_distill_loss"]:
             v["rlct_config"]["rlct_data_dir"] = "rlct_data"
         else:
             v["rlct_config"]["rlct_data_dir"] = "rlct_data_distill"
-        # Set total number of unique samples seen (n)
-        v["rlct_config"]["num_samples"] = min( (rlct_config["num_draws"] * rlct_config["num_steps_bw_draws"] + rlct_config["num_burnin_steps"]) * v["dataloader_config"]["train_bs"], task_config_instance.vocab_size**task_config_instance.length)
-        # Copy num samples to sampler kwargs for easy initialisation in main code. Be careful if this is not done it will break LLC estimator.
-        v["rlct_config"]["sgld_kwargs"]["num_samples"] = v["rlct_config"]["num_samples"]
+        # Set total number of unique samples seen (n): if this is not done it will break LLC estimator
+        v["rlct_config"]["slgd_kwargs"]["num_samples"] = min( (rlct_config["num_draws"] * rlct_config["num_steps_bw_draws"] + rlct_config["num_burnin_steps"]) * v["dataloader_config"]["train_bs"], task_config_instance.vocab_size**task_config_instance.length)
         # Burnin not implemented yet
-        assert rlct_config.num_burnin_steps == 0, 'Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.'
+        assert rlct_config["num_burnin_steps"] == 0, 'Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.'
         
         return v
 
 
+class PostRunSLTConfig(BaseModel):
+    """Use for specifying which run to load from WandB when post-processing. All other config attributes will be loaded from the run itself."""
+    model_type: ModelType
+    dataset_type: DatasetType
+    
+    lr: float
+    num_training_iter: int
+    n_layers: int
+    seq_len: int
+    truncate_its: Optional[int] = Field(default=None, description="Truncate training iterations to this number.")
+    
+    # Early stopping/truncation
+    early_stop_patience: Optional[int] = Field(default=5, description="Number of evaluation steps with no improvement in log loss before stopping.")
+    early_stop_smoothing_window: Optional[int] = Field(default=5, description="Size of moving average window to smooth out loss.")
+    early_stop_acc_threshold: Optional[float] = Field(default=99.9, description="Percent accuracy to immediately stop training at.")
+    
+    # Models
+    nano_gpt_config: Optional[NanoGPTConfig]
+    
+    rlct_config: Optional[RLCTConfig]
+    
+    # Flags
+    llc: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
+    ed: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
+    
+    wandb_project_name: str = Field(default="devinterp-automata")
+    entity_name: str = Field(default="wu-cindyx", description="Either WandB username or name of team.")
+    run_name: Optional[str] = Field(default=None, description="Set by validator.")
+    
+    @root_validator(pre=True)
+    def _set_fields(cls, v: dict):
+        v["run_name"] = f"{v['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}"
+
+        # Adjust RLCT parameters
+        rlct_config = v["rlct_config"]
+        # Set save folder name
+        if not rlct_config["use_distill_loss"]:
+            v["rlct_config"]["rlct_data_dir"] = "rlct_data"
+        else:
+            v["rlct_config"]["rlct_data_dir"] = "rlct_data_distill"
+        # Burnin not implemented yet
+        assert rlct_config["num_burnin_steps"] == 0, 'Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.'
+        
+        return v
+    
+    
 config_class_map = {
     "abab": ABABAutomatonConfig,
     "adder": AdderAutomatonConfig,

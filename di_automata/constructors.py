@@ -62,7 +62,7 @@ def construct_model(config: MainConfig) -> tuple[nn.Module, dict[str, InfParam]]
             output_weights_names=[get_param_name(model, model.unembedding[-1].weight)],  # type: ignore
         )
     else:
-        raise ValueError(f"Unknown architecture type: {config.architecture_type}")
+        raise ValueError(f"Unknown architecture type: {config.model_type}")
     return model, param_inf_types
 
 

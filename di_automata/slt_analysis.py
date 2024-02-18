@@ -8,10 +8,11 @@ from einops import rearrange
 from sklearn.decomposition import PCA
 import pandas as pd
 import numpy as np
+import subprocess
+from omegaconf import OmegaConf
 
 import torch
 
-from di_automata.devinterp.optim.sgld import SGLD
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
     extract_and_save_rlct_data,
@@ -31,14 +32,42 @@ image_folder = rlct_folder = Path(__file__).parent / "images"
 
 
 class PostRunSLT:
-    def __init__(self, config: MainConfig):
+    def __init__(self, slt_config: PostRunSLTConfig):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-        self.config = config
+        
+        self.slt_config = slt_config
+        
+        self.run_path = f"{slt_config.entity_name}/{slt_config.wandb_project_name}"
+        self.run_name = slt_config.run_name
+        
+        # Get run information
+        self.api = wandb.Api()
+        run_list = self.api.runs(
+            path=self.run_path, 
+            filters={
+                "display_name": self.run_name,
+                # "$or": [{"state": "crashed"}, {"state": "finished"}],
+                },
+            order="created_at", # Default descending order
+        )
+        self.run_api = run_list[0]
+        try: self.history = self.run_api.history()
+        except: self.history = self.run_api.history
+        self.loss_history = self.history["Train Loss"]
+        self.accuracy_history = self.history["Train Acc"]
+        
+        # My logic for picking 100 here is it's probably going to exist, but this might cause errors
+        self.config: MainConfig = self._get_config_old(idx=100)
+        # Set total number of unique samples seen (n). Be careful if this is not done it will break LLC estimator.
+        self.slt_config.rlct_config.sgld_kwargs.num_samples = self.slt_config.rlct_config.num_samples = self.config.rlct_config.sgld_kwargs.num_samples
+        self.slt_config.nano_gpt_config = self.config.nano_gpt_config
+        
+        # Now that you have config, log config etc again and set a new run going to write the RLCT information to
+        self._set_logger()
         
         self.ed_loader = create_dataloader_hf(self.config, deterministic=True) # Make sure deterministic to see same data
         
-        self.model, param_inf_properties = construct_model(config)
+        self.model, param_inf_properties = construct_model(self.config)
         
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
@@ -47,37 +76,20 @@ class PostRunSLT:
         
         self.ed_logits = []
         
-        # Get run information
-        self.api = wandb.Api()
-        run_api = self.api.runs(
-            path=f"{config.wandb_config.entity_name}/{config.wandb_config.wandb_project_name}", 
-            filters={"display_name": {"$regex": f"^{config.run_name}$"} },
-            order="created_at", # Default descending order
-        )[0]
-        wandb.init(
-            entity=f"{config.wandb_config.entity_name}", 
-            project=f"{config.wandb_config.wandb_project_name}", 
-            id=run_api.id, 
-            resume="must"
-        )
-        
-        try: self.history = run_api.history()
-        except: self.history = run_api.history
-        self.loss_history = self.history["Train Loss"]
-        self.accuracy_history = self.history["Train Acc"]
+        if self.slt_config.ed:
+            self._load_ed_logits()
+            self._truncate_ed_logits()
+            self._ed_calculation()
     
-    
-    def _ed(self):
-        self._truncate_ed_logits()
-        self._load_ed_logits()
-        self._ed_calculation()
+        if self.slt_config.llc:
+            self._rlct()
     
     
     def _restore_states(self, idx: int) -> None:
-        """Restore model state from a checkpoint.
-        Args:
-            idx: Ideally index but can also be epoch. TODO: currently all saved on wandb as epochs.
-            This is incorrect for ed calculations but correct for RLCT. Going ahead, all transition to idx.
+        """Restore model state from a checkpoint. Called once for every epoch.
+        
+        Params:
+            idx: Index in steps.
         """
         artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:idx{idx}_{self.config.run_name}")
         data_dir = artifact.download()
@@ -86,19 +98,48 @@ class PostRunSLT:
         self.model_state_dict = states["model"]
     
     
+    def _get_config_old(self, idx: int) -> MainConfig:
+        """Restore config from a checkpoint. Only call once in entire run.
+        
+        Params:
+            idx: Index in steps.
+        """
+        artifact = self.api.artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
+        data_dir = artifact.download()
+        config_path = Path(data_dir) / "config.yaml"
+        return OmegaConf.load(config_path)
+
+    
+    def _get_config(self) -> MainConfig:
+        """"Newer version of above function which removes need for indexing by separating config saving from model checkpointing."""
+        artifact = self.api.artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/config:{self.config.run_name}")
+        data_dir = artifact.download()
+        config_path = Path(data_dir) / "config.yaml"
+        return OmegaConf.load(config_path)
+    
+    
     def _load_ed_logits(self) -> None:
         """Load ED logits from WandB."""
-        artifact = self.api.artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/logits:{self.config.run_name}")
-        logits = artifact.download()
-        self.ed_logits = torch.load(logits)
+        artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
+        data_dir = artifact.download()
+        logit_path = Path(data_dir) / "logits_artifact"
+        self.ed_logits = torch.load(logit_path)
     
     
     def _truncate_ed_logits(self) -> None:
         """Truncate run to clean out overtraining at end for cleaner ED plots.
         Determines the cutoff index for early stopping based on log loss.
         """
+        # Manually specify cutoff index
+        if self.slt_config.truncate_its is not None:
+            total_its = len(self.loss_history) * self.config.eval_frequency
+            ed_logit_cutoff_idx = len(self.ed_logits) * self.slt_config.truncate_its // total_its
+            self.ed_logits = self.ed_logits[:ed_logit_cutoff_idx]
+            return
+        
+        # Automatically calculate cutoff index using early-stop patience
         log_loss_values = np.log(self.loss_history.to_numpy())
-        smoothed_log_loss = np.convolve(log_loss_values, np.ones(self.config.early_stop_smoothing_window)/self.config.early_stop_smoothing_window, mode='valid')
+        smoothed_log_loss = np.convolve(log_loss_values, np.ones(self.slt_config.early_stop_smoothing_window)/self.slt_config.early_stop_smoothing_window, mode='valid')
 
         increases = 0
         for i in range(1, len(smoothed_log_loss)):
@@ -106,8 +147,9 @@ class PostRunSLT:
                 increases += 1
                 if increases >= self.config.early_stop_patience:
                     # Index where the increase trend starts
-                    cutoff_idx = i - self.config.early_stop_patience + 1
-                    self.ed_logits = self.ed_logits[:cutoff_idx]
+                    cutoff_idx = (i - self.slt_config.early_stop_patience + 1) * self.config.eval_frequency # Cutoff idx in loss step
+                    ed_logit_cutoff_idx = cutoff_idx * self.config.rlct_config.ed_config.eval_frequency // self.config.eval_frequency
+                    self.ed_logits = self.ed_logits[:ed_logit_cutoff_idx]
             else:
                 increases = 0
         
@@ -118,8 +160,7 @@ class PostRunSLT:
         Diplay top 3 components against each other and show fraction variance explained.
         """
         pca = PCA(n_components=3)
-        concat_logit_matrix = torch.stack(self.ed_logits)
-        pca.fit(concat_logit_matrix.cpu().numpy())
+        pca.fit(self.ed_logits.cpu().numpy())
         
         projected_1, projected_2, projected_3 = [], [], []
         for row in self.ed_logits:
@@ -133,44 +174,37 @@ class PostRunSLT:
         plot_pca_plotly(projected_1, projected_2, projected_3, self.config)
         plot_explained_var(explained_variance)
         wandb.log({
-            "ED_PCA": wandb.Image("PCA.png"),
-            "explained_var": wandb.Image("pca_explained_var.png"),
+            "ED_PCA_truncated": wandb.Image("PCA.png"),
+            "explained_var_truncated": wandb.Image("pca_explained_var.png"),
         })
-        
-        torch.save(concat_logit_matrix, "logits")
-        logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-        logit_artifact.add_file("logits", name="logits_artifact")
-        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}"])
-        self._del_wandb_cache()
     
     
     def _rlct(self):
-        """Estimate RLCTs from a set of checkpoints after training and dump on WandB.
-        
-        TODO: edit name of artifact from counting epochs to counting iterations.
-        See function self._restore_states()
-        """
+        """Estimate RLCTs from a set of checkpoints after training, plot and dump graph on WandB."""
         train_loader = create_dataloader_hf(self.config, deterministic=False)
 
-        for epoch in range(self.config.num_epochs): # TODO: currently epochs coincides with evaluations, but may not always be true
-            self._restore_states(epoch)
+        for epoch in range(1, self.config.num_epochs): # TODO: currently epochs coincides with evaluations, but may not always be true
+            idx = epoch * self.config.eval_frequency
+            self._restore_states(idx)
             
             rlct_func = partial(
                 estimate_learning_coeff_with_summary,
                 loader=train_loader,
                 criterion=self.rlct_criterion,
-                main_config=self.config,
+                main_config=self.slt_config,
                 checkpoint=self.model_state_dict,
                 device=self.device,
             )
 
             results, callback_names = rlct_func(
-            sampling_method=rlct_class_map[self.config.rlct_config.sampling_method], 
-            optimizer_kwargs=self.config.rlct_config.sgld_kwargs
+            sampling_method=rlct_class_map[self.slt_config.rlct_config.sampling_method], 
+            optimizer_kwargs=self.slt_config.rlct_config.sgld_kwargs
             )
-            results_filtered = extract_and_save_rlct_data(results, callback_names, sampler_type=self.config.rlct_config.sampling_method.lower(), idx=epoch*self.config.eval_frequency)
+            # TODO: check these are the right objects
+            prev_run_stats_kwargs = {"loss": self.loss_history[epoch - 1], "acc": self.accuracy_history[epoch - 1]}
+            results_filtered = extract_and_save_rlct_data(results, callback_names, sampler_type=self.slt_config.rlct_config.sampling_method.lower(), idx=idx, kwargs=prev_run_stats_kwargs)
             self.rlct_data_list.append(results_filtered)
-            
+        
         rlct_df = pd.DataFrame(self.rlct_data_list)
         rlct_df.to_csv(rlct_folder / f"{self.config.run_name}.csv")
         rlct_artifact = wandb.Artifact(f"rlct", type="rlct", description="RLCT diagnostics.")
@@ -178,12 +212,45 @@ class PostRunSLT:
         wandb.log_artifact(rlct_artifact, aliases=[f"rlct_{self.config.run_name}"])
     
     
-    def finish_analysis(self):
-        wandb.finish()
+    def _set_logger(self) -> None:
+        # Add previous run id to tie runs together
+        self.config["prev_run_path"] = f"{self.run_path}/{self.run_api.id}"
+        logger_params = {
+            "name": f"post_{self.config.run_name}",
+            "project": self.config.wandb_config.wandb_project_name,
+            "settings": wandb.Settings(start_method="thread"),
+            "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
+            "mode": "disabled" if not self.config.is_wandb_enabled else "online",
+        }
+        self.run = wandb.init(**logger_params, entity=self.config.wandb_config.entity_name)
         
-        upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
-        if upload_cache_dir.is_dir():
-            shutil.rmtree(upload_cache_dir)
+        # Location on remote GPU of WandB cache to delete periodically
+        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
+        
+        
+    def finish_run(self):
+        if self.config.is_wandb_enabled:
+            wandb.finish()
+        
+            upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
+            if upload_cache_dir.is_dir():
+                shutil.rmtree(upload_cache_dir)
+                
+            time.sleep(60)
+            shutil.rmtree("wandb")
+        
+    
+    def _del_wandb_cache(self):
+        command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
+        try:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except:
+            print("Cache file deletion skipped.")
             
-        time.sleep(60)
-        shutil.rmtree("wandb")
+        for cache_dir in self.wandb_cache_dirs:
+            if cache_dir.is_dir():
+                try: 
+                    shutil.rmtree(cache_dir)
+                    print(f"Removed {cache_dir}")
+                except OSError as e: 
+                    print(f"Failed to remove dir {cache_dir}.", e)

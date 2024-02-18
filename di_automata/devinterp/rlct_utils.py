@@ -133,7 +133,8 @@ def extract_and_save_rlct_data(
     data: dict, 
     callback_names: list[str], 
     sampler_type: str, 
-    idx: int
+    idx: int,
+    **kwargs,
 ) -> dict:
     """Used to format data to log to WandB and save locally as csv.
     
@@ -144,6 +145,10 @@ def extract_and_save_rlct_data(
     # Always log mean and std
     log_dict[f"{sampler_type}/mean"] = return_dict[f"{sampler_type}/mean"] = data["llc/mean"]
     log_dict[f"{sampler_type}/std"] = return_dict[f"{sampler_type}/std"] = data["llc/std"]
+    if kwargs["loss"]:
+        log_dict["Train Acc"] = kwargs["loss"]
+    if kwargs["acc"]:
+        log_dict["Train Loss"] = kwargs["acc"]
     if "accept_ratio/mean" in data.keys():
         log_dict[f"{sampler_type}/accept_ratio"] = data["accept_ratio/mean"]
         return_dict[f"{sampler_type}/accept_ratio"] = data["accept_ratio/mean"]
@@ -180,6 +185,69 @@ def extract_and_save_rlct_data(
         return_dict[f"{sampler_type}/gradient_norm/mean"] = data["gradient_norm/trace"].mean().item()
         gradient_norm_p.save(gradient_norm_filename, width=10, height=4, dpi=300)
         log_dict["gradient_norm"] = wandb.Image(gradient_norm_filename)
+    
+    # TODO: additional metrics to be logged (e.g., GradientDistribution)
+    
+    wandb.log(log_dict, step=idx)
+    
+    for filename in [weight_norm_filename, gradient_norm_filename, noise_norm_filename]:
+        if os.path.exists(filename):
+            os.remove(filename)
+    
+    return return_dict
+
+
+def extract_and_plot_rlct_data(
+    data: dict, 
+    callback_names: list[str], 
+    sampler_type: str, 
+    idx: int
+) -> dict:
+    """Used to format data to log to WandB and save locally as csv.
+    
+    Needs a WandB instance to be initialised at time of function call.
+    """
+    log_dict = {}
+    return_dict = {}
+    # Always log mean and std
+    log_dict[f"{sampler_type}/mean_post"] = return_dict[f"{sampler_type}/mean"] = data["llc/mean"]
+    log_dict[f"{sampler_type}/std_post"] = return_dict[f"{sampler_type}/std"] = data["llc/std"]
+    if "accept_ratio/mean" in data.keys():
+        log_dict[f"{sampler_type}/accept_ratio_post"] = data["accept_ratio/mean"]
+        return_dict[f"{sampler_type}/accept_ratio_post"] = data["accept_ratio/mean"]
+    
+    loss_p = plot_trace(data["loss/trace"], "loss")
+    loss_filename = f"{sampler_type}_loss.png"
+    loss_p.save(loss_filename, width=10, height=4, dpi=300)
+    log_dict[f"{sampler_type}/loss"] = wandb.Image(loss_filename)
+    
+    # weight_norm_filename = "weight_norm.png"
+    # noise_norm_filename = "noise_norm.png"
+    # gradient_norm_filename = "gradient_norm.png"
+    
+    # if 'OnlineWBICEstimator' in callback_names:
+    #     log_dict[f"{sampler_type}/wbic/means"] = data["wbic/means"]
+    #     log_dict[f"{sampler_type}/wbic/stds"] = data["wbic/stds"]
+    #     return_dict[f"{sampler_type}/wbic/means/mean"] = data["wbic/means"].mean().item()
+    #     return_dict[f"{sampler_type}/wbic/std/mean"] = data["wbic/stds"].mean().item()
+
+    # if 'WeightNorm' in callback_names:
+    #     weight_norm_p = plot_trace(data["weight_norm/trace"], "weight norm")
+    #     return_dict[f"{sampler_type}/weight_norm/mean"] = data["weight_norm/trace"].mean().item()
+    #     weight_norm_p.save(weight_norm_filename, width=10, height=4, dpi=300)
+    #     log_dict["weight_norm"] = wandb.Image(weight_norm_filename)
+    
+    # if 'NoiseNorm' in callback_names:
+    #     noise_norm_p = plot_trace(data["noise_norm/trace"], "noise norm")
+    #     return_dict[f"{sampler_type}/noise_norm/mean"] = data["noise_norm/trace"].mean().item()
+    #     noise_norm_p.save(noise_norm_filename, width=10, height=4, dpi=300)
+    #     log_dict["noise_norm"] = wandb.Image(noise_norm_filename)
+    
+    # if 'GradientNorm' in callback_names:
+    #     gradient_norm_p = plot_trace(data["gradient_norm/trace"], "gradient norm")
+    #     return_dict[f"{sampler_type}/gradient_norm/mean"] = data["gradient_norm/trace"].mean().item()
+    #     gradient_norm_p.save(gradient_norm_filename, width=10, height=4, dpi=300)
+    #     log_dict["gradient_norm"] = wandb.Image(gradient_norm_filename)
     
     # TODO: additional metrics to be logged (e.g., GradientDistribution)
     
