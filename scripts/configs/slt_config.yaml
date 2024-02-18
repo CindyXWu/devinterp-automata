@@ -1,3 +1,6 @@
+defaults:
+  - task_config: adder
+
 model_type: NANO_GPT
 dataset_type: 'adder'
 

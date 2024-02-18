@@ -43,7 +43,7 @@ rlct_config:
     temperature: adaptive
     num_samples: 10000 # True value set at run-time.
     bounding_box_size: 0.5
-    mh_frequency: 10
+    mh_frequency: 5
 
   rlct_model_save_dir: null
   rlct_data_dir: null
@@ -54,7 +54,7 @@ num_epochs: null
 
 optimizer_config:
   optimizer_type: ADAMW
-  default_lr: 1e-4
+  default_lr: 1e-3
   final_lr: 5e-5
   global_lr: 1.0
   optimizer_kwargs: {}

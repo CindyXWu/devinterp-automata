@@ -503,7 +503,7 @@ class MainConfig(BaseModel):
         if not v["eval_frequency"]:
             v["eval_frequency"] = task_config["size"]
         # Note run dataset name matches that in the dataset specific config and loaded up in dataloder
-        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['optimizer_config']['default_lr']}_its{v['num_training_iter']}_layers{v['nano_gpt_config']['n_layers']}_seqlen{task_config['length']}"
+        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['optimizer_config']['default_lr']}_its{v['num_training_iter']}_layers{v['nano_gpt_config']['n_layers']}_seqlen{task_config['length']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"
         v["is_wandb_enabled"] = v["wandb_config"] and v["wandb_config"]["log_to_wandb"]
         v["num_epochs"] = math.ceil(v["num_training_iter"] / v["eval_frequency"])
         
@@ -562,7 +562,12 @@ class PostRunSLTConfig(BaseModel):
     
     @root_validator(pre=True)
     def _set_fields(cls, v: dict):
-        v["run_name"] = f"{v['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}"
+        # Instantiate correct class for task config
+        task_config = v["task_config"]
+        config_class = config_class_map[task_config["dataset_type"]]
+        task_config_instance = config_class(**task_config)
+        
+        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['optimizer_config']['default_lr']}_its{v['num_training_iter']}_layers{v['nano_gpt_config']['n_layers']}_seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"
 
         # Adjust RLCT parameters
         rlct_config = v["rlct_config"]
