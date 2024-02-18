@@ -524,7 +524,7 @@ class MainConfig(BaseModel):
         else:
             v["rlct_config"]["rlct_data_dir"] = "rlct_data_distill"
         # Set total number of unique samples seen (n): if this is not done it will break LLC estimator
-        v["rlct_config"]["slgd_kwargs"]["num_samples"] = min( (rlct_config["num_draws"] * rlct_config["num_steps_bw_draws"] + rlct_config["num_burnin_steps"]) * v["dataloader_config"]["train_bs"], task_config_instance.vocab_size**task_config_instance.length)
+        v["rlct_config"]["sgld_kwargs"]["num_samples"] = v["rlct_config"]["num_samples"] = min( (rlct_config["num_draws"] * rlct_config["num_steps_bw_draws"] + rlct_config["num_burnin_steps"]) * v["dataloader_config"]["train_bs"], task_config_instance.vocab_size**task_config_instance.length)
         # Burnin not implemented yet
         assert rlct_config["num_burnin_steps"] == 0, 'Burn-in is currently not implemented correctly, please set num_burnin_steps to 0.'
         
