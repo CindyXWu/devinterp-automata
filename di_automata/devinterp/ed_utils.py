@@ -4,43 +4,17 @@ from dotenv import load_dotenv
 import logging
 from pathlib import Path
 import numpy as np
-import pandas as pd
-import tqdm
 import itertools
 import pickle
 import scipy.ndimage
-from torch import nn
-from torch.nn import functional as F
 import matplotlib.pyplot as plt
 import matplotlib.font_manager
-import matplotlib.gridspec as gridspec
 import seaborn as sns
-import wandb
 
-from sklearn.decomposition import PCA
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-
-from di_automata.devinfra.utils.iterables import int_linspace
 from di_automata.config_setup import EDPlotConfig
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv();
-
-# Matplotlib defaults
-fonts = set(f.name for f in matplotlib.font_manager.fontManager.ttflist)
-
-sns.set_style("ticks")
-# plt.rcParams["font.family"] = "Times New Roman"
-plt.rc('xtick', labelsize=10)
-plt.rc('ytick', labelsize=10)
-plt.rc('axes', labelsize=10)
-plt.rc('legend', fontsize=10)
-plt.rc('axes', titlesize=12)
-plt.rcParams['figure.dpi'] = 300
-
-golden_ratio = (5**0.5 - 1) / 2
-WIDTH = 3.25
-HEIGHT = WIDTH * golden_ratio
 
 
 def get_nearest_step(steps, step):
@@ -205,10 +179,6 @@ class EssentialDynamicsPlotter:
             
             self._plot_osculating_circles(osculating_data)
             self._draw_phases(i, j)
-            # # This was needed in the original code because it didn't use itertools, but keep for safety measure
-            # if self.I >= len(self.axes): 
-            #     print("Continuing as beyond axes count")
-            #     continue
             self._mark_points(osculating_data)
             
             self.axes[self.I].set_xlabel(f'PC {i+1}')
@@ -238,8 +208,6 @@ class EssentialDynamicsPlotter:
             color = 'lightgray'
             circle = plt.Circle((center[0].item(), center[1].item()), radius.item(), alpha=0.5, color=color, lw = 0.5, fill=False)
 
-            # if self.I < len(self.axes):
-            #     self.axes[self.I].add_artist(circle)
             self.axes[self.I].add_artist(circle)
 
             prev_center = center
@@ -258,13 +226,11 @@ class EssentialDynamicsPlotter:
             self.dcenter_bound = sorted_dcenter_list[self.config.num_vertices]
         
         # Plot un-smoothed points in the background
-        #if I < len(axes):
-        #    axes[I].scatter(x=samples[:, i], y=samples[:, j], alpha=0.8, color="lightgray", s=10)
+        # axes[I].scatter(x=samples[:, i], y=samples[:, j], alpha=0.8, color="lightgray", s=10)
         
         
     def _draw_phases(self, i: int, j: int):
         """Colour each phase on the ED plot with a different line."""
-        # if self.I < len(self.axes):
         # If we want to plot phases as separate sections
         if self.config.transitions:
             for k, (start, end, stage) in enumerate(self.config.transitions):
@@ -355,7 +321,7 @@ class EssentialDynamicsPlotter:
         plt.tight_layout(rect=[0, 0, 1, 1])
 
         if self.config.transitions:
-            legend_ax = self.fig.add_axes([0.1, -0.03, 0.95, 0.05])  # Adjust these values as needed
+            legend_ax = self.fig.add_axes([0.1, -0.03, 0.95, 0.05])
             handles = [plt.Line2D([0], [0], color=self.colors[i], linestyle='-') for i in range(len(self.config.transitions))]
             labels = [label for _, _, label in self.config.transitions]
             legend_ax.legend(handles, labels, loc='center', ncol=len(labels), frameon=False)
@@ -367,8 +333,9 @@ class EssentialDynamicsPlotter:
 
     def _set_matplotlib(self) -> Tuple[matplotlib.figure.Figure, Union[matplotlib.axes.Axes, List[matplotlib.axes.Axes]]]:
         """Set matplotlib defaults."""
+        fonts = set(f.name for f in matplotlib.font_manager.fontManager.ttflist)
         sns.set_style("ticks")
-        plt.rcParams["font.family"] = "Times New Roman"
+        # plt.rcParams["font.family"] = "Times New Roman"
         plt.rc('xtick', labelsize=10)
         plt.rc('ytick', labelsize=10)
         plt.rc('axes', labelsize=10)
@@ -378,7 +345,7 @@ class EssentialDynamicsPlotter:
         
         golden_ratio = (5**0.5 - 1) / 2
         self.WIDTH = 3.25
-        self.HEIGHT = WIDTH * golden_ratio
+        self.HEIGHT = self.WIDTH * golden_ratio
         
         self.palette = 'tab10'
         self.colors = self.config.colors or sns.color_palette(self.palette)
@@ -392,12 +359,3 @@ class EssentialDynamicsPlotter:
             axes = [axes]
         
         return fig, axes
-
-
-if __name__ == "__main__":
-    """TODO: refactor"""
-    # Example of how to use this class
-    config_path = 'path/to/config.yaml'
-    plotter = EssentialDynamicsPlotter(config_path)
-    fig = plotter.plot()
-    plt.show()
