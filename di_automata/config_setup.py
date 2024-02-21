@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, validator, root_validator
 from enum import Enum
 from abc import abstractmethod
-from typing import Any, Optional, List, Union
+from typing import Any, Optional, List, Union, Tuple
 import math
 
 from di_automata.devinterp.optim.sgld import SGLD
@@ -139,6 +139,7 @@ class DatasetConfig(BaseModel):
     length: int = Field(default=100, description="Paper uses sequence length 100.") 
     random_length: Optional[bool] = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
     seed: Optional[int] = Field(default=None)
+    pad_token: Optional[int] = Field(default=1, description="If specified, pad sequences by this length.")
     
     @property
     def dataset_filename(self):
@@ -454,20 +455,38 @@ class WandBConfig(BaseModel):
         return value
 
 
+class EDPlotConfig(BaseModel):
+    transitions: Optional[Tuple[int, int, int]] = Field(default=None, description="List of tuples (start, end, stage), representing the starting point, ending point, and a stage or condition of each unique phase identified from ED plot.")
+    colors: Optional[List[Tuple[int]]] = Field(default=None, description="List of RGB tuples for each state.")
+    num_pca_components: int = 3
+    plot_caustic: bool = True
+    figsize: Tuple[int, int] = (20, 6)
+    marked_cusp_data: Optional[bool] = Field(default=True)
+    use_cache: bool = False
+    num_sharp_points: int = 20
+    num_vertices: int = 35
+    osculate_start: int = Field(default=1, description="Number of checkpoints to skip before calculating first osculating circle.")
+    osculate_end_offset: int = Field(default=0, description="Number of checkpoints between last osculating circle checkpoint and last checkpoint during training.")
+    osculate_skip: int = Field(default=8, description="Number of checkpoints to skip in between calculating each osculating circle.")
+    smoothing_sigma_early: int = 10
+    smoothing_sigma_late: int = 60
+    smoothing_late_boundary: int = 200
+    show_vertex_influence: bool = False
+    ed_folder: str = Field(default=None, description="Folder to save essential dynamics plots to.")
+    
+
 class MainConfig(BaseModel):
     model_type: ModelType
     
+    ## Other config classes
     # Leave class type for task config open and instantiate properly in root validator
     task_config: dict
+    nano_gpt_config: Optional[NanoGPTConfig]
+    rlct_config: Optional[RLCTConfig]
+    wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
     initialisation: InitialisationConfig = Field(default_factory=InitialisationConfig)
     optimizer_config: OptimizerConfig = Field(default_factory=OptimizerConfig)
-    
-    ## Models
-    nano_gpt_config: Optional[NanoGPTConfig]
-    
-    rlct_config: Optional[RLCTConfig]
-    wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     
     ## Training bits and bobs
     llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
@@ -507,6 +526,9 @@ class MainConfig(BaseModel):
         v["is_wandb_enabled"] = v["wandb_config"] and v["wandb_config"]["log_to_wandb"]
         v["num_epochs"] = math.ceil(v["num_training_iter"] / v["eval_frequency"])
         
+        # Set cosine LR schedule final value
+        v["optimizer_config"]["final_lr"] = float(v["optimizer_config"]["default_lr"]) / 10
+        
         # Adjust NanoGPTConfig based on DatasetConfig
         if v["nano_gpt_config"] and task_config:
             nano_gpt_config = v["nano_gpt_config"]
@@ -533,29 +555,32 @@ class MainConfig(BaseModel):
 
 class PostRunSLTConfig(BaseModel):
     """Use for specifying which run to load from WandB when post-processing. All other config attributes will be loaded from the run itself."""
+    ## Crucial
     model_type: ModelType
     dataset_type: DatasetType
     
+    ## Other config classes
+    task_config: dict
+    ed_plot_config: EDPlotConfig = Field(default_factory=EDPlotConfig)
+    rlct_config: Optional[RLCTConfig]
+    
+    ## Training bits and bobs
     lr: float
     num_training_iter: int
     n_layers: int
     seq_len: int
     truncate_its: Optional[int] = Field(default=None, description="Truncate training iterations to this number.")
     
-    # Early stopping/truncation
+    ## Early stopping/truncation
     early_stop_patience: Optional[int] = Field(default=5, description="Number of evaluation steps with no improvement in log loss before stopping.")
     early_stop_smoothing_window: Optional[int] = Field(default=5, description="Size of moving average window to smooth out loss.")
     early_stop_acc_threshold: Optional[float] = Field(default=99.9, description="Percent accuracy to immediately stop training at.")
     
-    # Models
-    nano_gpt_config: Optional[NanoGPTConfig]
-    
-    rlct_config: Optional[RLCTConfig]
-    
-    # Flags
+    ## Flags
     llc: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
     ed: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
     
+    ## WandB
     wandb_project_name: str = Field(default="devinterp-automata")
     entity_name: str = Field(default="wu-cindyx", description="Either WandB username or name of team.")
     run_name: Optional[str] = Field(default=None, description="Set by validator.")
@@ -567,7 +592,9 @@ class PostRunSLTConfig(BaseModel):
         config_class = config_class_map[task_config["dataset_type"]]
         task_config_instance = config_class(**task_config)
         
-        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['optimizer_config']['default_lr']}_its{v['num_training_iter']}_layers{v['nano_gpt_config']['n_layers']}_seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"
+        ## For new run names
+        # v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"
+        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}"
 
         # Adjust RLCT parameters
         rlct_config = v["rlct_config"]

@@ -22,7 +22,8 @@ def main(config: PostRunSLTConfig) -> None:
     omegaconf_config = OmegaConf.create(pydantic_config.dict())
 
     post_run = PostRunSLT(omegaconf_config)
-    post_run.finish()
+    post_run.run_slt()
+    
     
 if __name__ == "__main__":
     main()

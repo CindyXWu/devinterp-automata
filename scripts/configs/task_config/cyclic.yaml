@@ -2,6 +2,7 @@ dataset_type: cyclic
 size: 60000
 length: 25
 random_length: false
+pad_token: 1
 seed: null # If set to non-null value, same data seen each epoch (dig into guts of np_rng in Automaton datasets)
 n: 5
 n_actions: 2

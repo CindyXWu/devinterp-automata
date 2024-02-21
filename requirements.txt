@@ -64,4 +64,9 @@ omegaconf
 pytest
 pydantic
 seaborn
+python-dotenv
 torch-ema
+
+# AWS
+boto3
+s3fs

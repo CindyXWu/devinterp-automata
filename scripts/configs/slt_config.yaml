@@ -4,6 +4,9 @@ defaults:
 model_type: NANO_GPT
 dataset_type: 'adder'
 
+llc: false
+ed: true
+
 lr: 1e-4
 num_training_iter: 14000
 early_stop_patience: 10
@@ -16,9 +19,6 @@ seq_len: 25
 
 wandb_project_name: devinterp-automata
 entity_name: wu-cindyx
-
-llc: true
-ed: true
 
 rlct_config:
   sampling_method: SGLD_MA
@@ -51,3 +51,22 @@ rlct_config:
 
   rlct_model_save_dir: null
   rlct_data_dir: null
+
+ed_plot_config:
+  transitions: null
+  colors: null  # Example: [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
+  num_pca_components: 3
+  plot_caustic: true
+  figsize: [20, 6]
+  marked_cusp_data: true
+  use_cache: false
+  num_sharp_points: 20
+  num_vertices: 35
+  osculate_start: 1
+  osculate_end_offset: 0
+  osculate_skip: 8
+  smoothing_sigma_early: 10
+  smoothing_sigma_late: 60
+  smoothing_late_boundary: 200
+  show_vertex_influence: false
+  ed_folder: ed_data

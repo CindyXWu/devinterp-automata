@@ -2,6 +2,7 @@
 from typing import Iterable, TypeVar, Optional, Iterator
 T = TypeVar("T")
 
+import torch
 from torch.utils.data import IterableDataset
 
 from di_automata.tasks.automata import AutomatonDataset
@@ -29,7 +30,7 @@ class TorchDatasetFromIterable(IterableDataset):
         """Unique samples in dataloader."""
         return self.config.num_epochs * self.config.dataloader_config.train_bs * self.config.eval_frequency
     
-
+    
 def take_n(i: Iterable[T],  n: Optional[int]) -> Iterator[T]:
     """
     Take the first `n` elements from the iterable `i`. If n is None, iterate over all elements.

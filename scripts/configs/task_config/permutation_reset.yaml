@@ -2,6 +2,7 @@ dataset_type: permutation_reset
 size: 60000
 length: 25
 random_length: false
+pad_token: 1
 seed: null
 n: 5
 generators: [[1,0,2,3,4], [4,0,1,2,3]] # Need to make sure number of members in each generator is same as n

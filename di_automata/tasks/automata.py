@@ -162,6 +162,7 @@ class BinaryInputAutomaton(Automaton):
 
         self.prob1 = data_config['prob1']
         self.__info__ = "  - prob1 (float in [0,1]): probability of token 1\n" + self.__info__
+            
 
     def f(self, x):
         raise NotImplementedError()

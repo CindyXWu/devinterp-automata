@@ -25,19 +25,22 @@ from di_automata.constructors import (
     create_dataloader_hf,
     construct_rlct_criterion,
 )
+from di_automata.devinterp.ed_utils import EssentialDynamicsPlotter
 Sweep = TypeVar("Sweep")
 
 
-image_folder = rlct_folder = Path(__file__).parent / "images"
+image_folder = Path(__file__).parent / "images"
+rlct_folder = Path(__file__).parent / "rlct_data"
+logit_folder = Path(__file__).parent.parent.parent.parent / "logits"
 
 
 class PostRunSLT:
     def __init__(self, slt_config: PostRunSLTConfig):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
-        self.slt_config = slt_config
+        self.slt_config: PostRunSLTConfig = slt_config
         
-        self.run_path = f"{slt_config.entity_name}/{slt_config.wandb_project_name}"
+        self.run_path = f"{slt_config.entity_name}/{slt_config.wandb_project_name}-alpha"
         self.run_name = slt_config.run_name
         
         # Get run information
@@ -48,7 +51,7 @@ class PostRunSLT:
                 "display_name": self.run_name,
                 # "$or": [{"state": "crashed"}, {"state": "finished"}],
                 },
-            order="created_at", # Default descending order
+            order="created_at", # Default descending order so backwards in time
         )
         self.run_api = run_list[0]
         try: self.history = self.run_api.history()
@@ -57,7 +60,11 @@ class PostRunSLT:
         self.accuracy_history = self.history["Train Acc"]
         
         # My logic for picking 100 here is it's probably going to exist, but this might cause errors
-        self.config: MainConfig = self._get_config_old(idx=100)
+        try:
+            self.config: MainConfig = self._get_config()
+        except:
+            self.config: MainConfig = self._get_config_old(idx=3800)
+        
         # Set total number of unique samples seen (n). Be careful if this is not done it will break LLC estimator.
         self.slt_config.rlct_config.sgld_kwargs.num_samples = self.slt_config.rlct_config.num_samples = self.config.rlct_config.sgld_kwargs.num_samples
         self.slt_config.nano_gpt_config = self.config.nano_gpt_config
@@ -75,14 +82,25 @@ class PostRunSLT:
         self.rlct_criterion = construct_rlct_criterion(self.config)
         
         self.ed_logits = []
-        
+    
+    
+    def run_slt(self):
+        """Main executable function of this class."""
         if self.slt_config.ed:
             self._load_ed_logits()
             self._truncate_ed_logits()
             self._ed_calculation()
+            
+            # Create and call instance of essential dynamics osculating circle plotter
+            ed_plotter = EssentialDynamicsPlotter(self.slt_config.ed_plot_config)
+            ed_plotter.smooth_all_components()
+            ed_plotter.plot_osculating_main()
+            wandb.log("ed_osculating", wandb.Image("ed_osculating_circles.png"))
     
         if self.slt_config.llc:
             self._rlct()
+        
+        self._finish_run()
     
     
     def _restore_states(self, idx: int) -> None:
@@ -91,7 +109,7 @@ class PostRunSLT:
         Params:
             idx: Index in steps.
         """
-        artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:idx{idx}_{self.config.run_name}")
+        artifact = self.run.use_artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
         data_dir = artifact.download()
         model_state_path = Path(data_dir) / "states.torch"
         states = torch.load(model_state_path)
@@ -112,7 +130,7 @@ class PostRunSLT:
     
     def _get_config(self) -> MainConfig:
         """"Newer version of above function which removes need for indexing by separating config saving from model checkpointing."""
-        artifact = self.api.artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/config:{self.config.run_name}")
+        artifact = self.api.artifact(f"{self.run_path}/config:{self.run_name}")
         data_dir = artifact.download()
         config_path = Path(data_dir) / "config.yaml"
         return OmegaConf.load(config_path)
@@ -120,7 +138,8 @@ class PostRunSLT:
     
     def _load_ed_logits(self) -> None:
         """Load ED logits from WandB."""
-        artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
+        # artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
+        artifact = self.api.artifact(f"{self.run_path}/logits:dihedral_test")
         data_dir = artifact.download()
         logit_path = Path(data_dir) / "logits_artifact"
         self.ed_logits = torch.load(logit_path)
@@ -162,22 +181,24 @@ class PostRunSLT:
         pca = PCA(n_components=3)
         pca.fit(self.ed_logits.cpu().numpy())
         
-        projected_1, projected_2, projected_3 = [], [], []
-        for row in self.ed_logits:
+        # Projected coordinates for plotting purposes
+        pca_projected_samples = np.empty((len(self.ed_logits, 3)))
+        for i, row in enumerate(self.ed_logits):
             logits_epoch = rearrange(row, 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
-            projected_1.append(projected_vector[0])
-            projected_2.append(projected_vector[1])
-            projected_3.append(projected_vector[2])
+            pca_projected_samples[i] = projected_vector
         explained_variance = pca.explained_variance_ratio_
         
-        plot_pca_plotly(projected_1, projected_2, projected_3, self.config)
+        plot_pca_plotly(pca_projected_samples[:,0], pca_projected_samples[:,1], pca_projected_samples[:,2], self.config)
         plot_explained_var(explained_variance)
+        
         wandb.log({
             "ED_PCA_truncated": wandb.Image("PCA.png"),
             "explained_var_truncated": wandb.Image("pca_explained_var.png"),
         })
-    
+        
+        torch.save(pca_projected_samples, self.slt_config.ed_plot_config.ed_folder / f"pca_projected_samples_{self.config.run_name}.torch")
+        
     
     def _rlct(self):
         """Estimate RLCTs from a set of checkpoints after training, plot and dump graph on WandB."""
@@ -213,6 +234,7 @@ class PostRunSLT:
     
     
     def _set_logger(self) -> None:
+        """Call at initialisation to set loggers to WandB and/or AWS."""
         # Add previous run id to tie runs together
         self.config["prev_run_path"] = f"{self.run_path}/{self.run_api.id}"
         logger_params = {
@@ -228,7 +250,7 @@ class PostRunSLT:
         self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
         
         
-    def finish_run(self):
+    def _finish_run(self):
         if self.config.is_wandb_enabled:
             wandb.finish()
         
