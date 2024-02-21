@@ -1,3 +1,4 @@
+from typing import Union, List, Tuple
 import os
 from dotenv import load_dotenv
 import logging
@@ -14,6 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager
 import matplotlib.gridspec as gridspec
 import seaborn as sns
+import wandb
 
 from sklearn.decomposition import PCA
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -28,7 +30,7 @@ load_dotenv();
 fonts = set(f.name for f in matplotlib.font_manager.fontManager.ttflist)
 
 sns.set_style("ticks")
-plt.rcParams["font.family"] = "Times New Roman"
+# plt.rcParams["font.family"] = "Times New Roman"
 plt.rc('xtick', labelsize=10)
 plt.rc('ytick', labelsize=10)
 plt.rc('axes', labelsize=10)
@@ -47,7 +49,7 @@ def get_nearest_step(steps, step):
     return steps[idx]
     
 
-def osculating_circle(curve: list[np.ndarray], t_index: int):
+def osculating_circle(curve: List[np.ndarray], t_index: int) -> Tuple[float, float]:
     """Calculate radius and centre of curvature given a list of 2D/3D coordinates defining a curve."""
     # Handle edge cases
     if t_index == 0:
@@ -89,7 +91,8 @@ class EssentialDynamicsPlotter:
         self, 
         samples: np.ndarray,
         steps: np.ndarray,
-        ed_plot_config: EDPlotConfig
+        ed_plot_config: EDPlotConfig,
+        run_name: str,
     ):
         """
         Class for plotting osculating circles and caustic cusps.
@@ -101,7 +104,9 @@ class EssentialDynamicsPlotter:
         """
         self.config = ed_plot_config
         self.samples = samples
+        print("Number of samples: " + str(len(samples)))
         self.steps = steps
+        self.run_name = run_name
         
         ## Set constants
         # Start and end points for linear interpolation used for smoothing
@@ -111,29 +116,38 @@ class EssentialDynamicsPlotter:
         self.CUTOFF_START = self.config.osculate_start
         self.CUTOFF_END = self.config.osculate_end_offset
         self.OSCULATE_SKIP = self.config.osculate_skip
-        
+        # Often-used range list for plotting marks
         self.PLOT_RANGE = range(self.CUTOFF_START, len(self.samples) - self.CUTOFF_END, self.OSCULATE_SKIP)
-            
+
+        # Make folder which belongs to particular run name
+        self.ed_folder_path = Path(__file__).parent / f"{self.config.ed_folder}/{self.run_name}"
+        self.ed_folder_path.mkdir(parents=True, exist_ok=True)
+        
         self.I = 0
         
         # Set axes, matplotlib defaults etc
         self.fig, self.axes = self._set_matplotlib()
-        
+        self._smooth_all_components()
+        # Body, grunt work of plotting
+        self._plot_osculating_main()
+        # Produce figure
         self._finish_plot()
         
         
-    def smooth_all_components(self) -> list[np.ndarray]:
-        """Create and update self.smoothed_pcs: list of np.ndarray coordinates"""
+    def _smooth_all_components(self) -> list[np.ndarray]:
+        """Create and update self.smoothed_pcs: list of np.ndarray coordinates.
+        Save to file via pickle.
+        """
         self.smoothed_pcs = []
         
         for i in range(self.config.num_pca_components):
-            file_path_smoothing = Path(self.config.ed_folder) / f'smoothed_pc_i{i}.pkl'
+            file_path_smoothing = self.ed_folder_path / 'smoothed_principle_component_{i}.pkl'
             
             if self.config.use_cache and os.path.exists(file_path_smoothing):
                 with open(file_path_smoothing, 'rb') as file:
                     smoothed_pc = pickle.load(file)
             else:
-                smoothed_pc = self._smooth_component(i, file_path_smoothing)
+                smoothed_pc = self._smooth_component(i)
                 
                 with open(file_path_smoothing, 'wb') as file:
                     pickle.dump(smoothed_pc, file)
@@ -141,9 +155,12 @@ class EssentialDynamicsPlotter:
             self.smoothed_pcs.append(smoothed_pc)
 
 
-    def _smooth_component(self, i, file_path_smoothing) -> np.ndarray:
+    def _smooth_component(self, i) -> np.ndarray:
         """Smooth single PCA component.
-        smoothed_pc has same dimensions as one column of self.samples
+        smoothed_pc has same dimensions as one column of self.samples.
+
+        Args:
+            i: PCA component index.
         """
         smoothed_pc = np.zeros_like(self.samples[:,0])
         
@@ -154,21 +171,15 @@ class EssentialDynamicsPlotter:
                 sigma = self.config.smoothing_sigma_late
             else: # Linear interpolation
                 sigma = (self.config.smoothing_sigma_late - self.config.smoothing_sigma_early)/(self.END_LERP - self.START_LERP) * (t_idx - self.START_LERP) + self.config.smoothing_sigma_early
-
-            smoothed_pc[t_idx, 0] = scipy.ndimage.gaussian_filter1d(self.samples[:, i], sigma)[t_idx]
-        
-        with open(file_path_smoothing, 'wb') as file:
-            pickle.dump(smoothed_pc, file)
+                
+            smoothed_pc[t_idx] = scipy.ndimage.gaussian_filter1d(self.samples[:, i], sigma)[t_idx]
             
         return smoothed_pc
 
 
-    def plot_osculating_main(self):
+    def _plot_osculating_main(self):
         """For each principle component pair we first do some data processing, then plotting.
         Calls multiple helper plotter functions below.
-        
-        Args:
-            smoothed_pcs: As many smoothed np.ndarrays as there are principle components specified.
         """
         for i,j in itertools.combinations(range(self.config.num_pca_components), 2):
             print(f'Processing PC{j+1} vs PC{i+1}')
@@ -178,7 +189,7 @@ class EssentialDynamicsPlotter:
             self.smoothed_samples = np.column_stack((smoothed_pc_i, smoothed_pc_j))
             
             # Load osculating data
-            file_path_osculating = Path(self.config.ed_folder) / f'osculating_data_i{i}_j{j}.pkl'
+            file_path_osculating = self.ed_folder_path / f'osculating_data_i{i}_j{j}.pkl'
             if self.config.use_cache and os.path.exists(file_path_osculating):
                 print("Using cached osculate data")
                 with open(file_path_osculating, 'rb') as file:
@@ -193,17 +204,17 @@ class EssentialDynamicsPlotter:
                     pickle.dump(osculating_data, file)
             
             self._plot_osculating_circles(osculating_data)
-            self._draw_phases(osculating_data, i, j)
-
-            # This was needed in the original code because it didn't use itertools, but keep for safety measure
-            if self.I >= len(self.axes): 
-                continue
-        
-            self._mark_points()
+            self._draw_phases(i, j)
+            # # This was needed in the original code because it didn't use itertools, but keep for safety measure
+            # if self.I >= len(self.axes): 
+            #     print("Continuing as beyond axes count")
+            #     continue
+            self._mark_points(osculating_data)
             
             self.axes[self.I].set_xlabel(f'PC {i+1}')
             self.axes[self.I].set_ylabel(f'PC {j+1}')
 
+            self.I += 1
 
 
     def _plot_osculating_circles(self, osculating_data:  dict[str, tuple[float, float]]):
@@ -227,20 +238,21 @@ class EssentialDynamicsPlotter:
             color = 'lightgray'
             circle = plt.Circle((center[0].item(), center[1].item()), radius.item(), alpha=0.5, color=color, lw = 0.5, fill=False)
 
-            if self.I < len(self.axes):
-                self.axes[self.I].add_artist(circle)
+            # if self.I < len(self.axes):
+            #     self.axes[self.I].add_artist(circle)
+            self.axes[self.I].add_artist(circle)
 
             prev_center = center
 
         # Find high curvature points
-        sorted_radii_list = list(self.radii.values()).sort()
+        sorted_radii_list = sorted(list(self.radii.values()))
         self.sharp_radius_upper_bound = 0
         if len(sorted_radii_list) > self.config.num_sharp_points:
             # Radius determines a sharp point (i.e. small radii), note sorting ascending
             self.sharp_radius_upper_bound = sorted_radii_list[self.config.num_sharp_points]
         
         # Find caustic cusps
-        sorted_dcenter_list = list(self.dcenter.values()).sort()
+        sorted_dcenter_list = sorted(list(self.dcenter.values()))
         self.dcenter_bound = 0
         if len(sorted_dcenter_list) > self.config.num_vertices:
             self.dcenter_bound = sorted_dcenter_list[self.config.num_vertices]
@@ -252,21 +264,21 @@ class EssentialDynamicsPlotter:
         
     def _draw_phases(self, i: int, j: int):
         """Colour each phase on the ED plot with a different line."""
-        if self.I < len(self.axes):
-            # If we want to plot phases as separate sections
-            if self.config.transitions:
-                for k, (start, end, stage) in enumerate(self.config.transitions):
-                    start_idx  = self.steps.index(get_nearest_step(self.steps, start))
-                    end_idx = self.steps.index(get_nearest_step(self.steps, end)) + 1
-                    
-                    self.axes[self.I].plot(
-                        self.smoothed_samples[start_idx :end_idx, 0], 
-                        self.smoothed_samples[start_idx :end_idx, 1], 
-                        color=self.colors[k], 
-                        lw = 2
-                    )
-            else:
-                self.axes[self.I].plot(self.samples[:, i], self.samples[:, j])
+        # if self.I < len(self.axes):
+        # If we want to plot phases as separate sections
+        if self.config.transitions:
+            for k, (start, end, stage) in enumerate(self.config.transitions):
+                start_idx  = self.steps.index(get_nearest_step(self.steps, start))
+                end_idx = self.steps.index(get_nearest_step(self.steps, end)) + 1
+                
+                self.axes[self.I].plot(
+                    self.smoothed_samples[start_idx :end_idx, 0], 
+                    self.smoothed_samples[start_idx :end_idx, 1], 
+                    color=self.colors[k], 
+                    lw = 2
+                )
+        else:
+            self.axes[self.I].plot(self.samples[:, i], self.samples[:, j])
 
         # Look for points where distance between neighbouring centres is small i.e. curve is relatively tight
         for t_idx in self.PLOT_RANGE:
@@ -283,7 +295,11 @@ class EssentialDynamicsPlotter:
                     self.axes[self.I].scatter(self.smoothed_samples[t_idx, 0], self.smoothed_samples[t_idx, 1], color='red')
 
     
-    def _mark_points(self, osculating_data):
+    def _mark_points(self, osculating_data: dict[str, tuple[float, float]]):
+        """
+        Args:
+            osculating_data: key checkpoint index, value tuple(radii,centres) of osculating circles.
+        """
         current_x_limits = self.axes[self.I].get_xlim()
         current_y_limits = self.axes[self.I].get_ylim()
         
@@ -334,6 +350,7 @@ class EssentialDynamicsPlotter:
 
 
     def _finish_plot(self):
+        labels = [""]
         self.axes[0].set_ylabel(f"{labels[0]}\n\nPC 1")
         plt.tight_layout(rect=[0, 0, 1, 1])
 
@@ -345,10 +362,10 @@ class EssentialDynamicsPlotter:
             legend_ax.axis('off')
         
         self.fig.set_facecolor('white')
-        self.fig.savefig('ed_osculating_circle.png', dpi=300)
+        self.fig.savefig('ed_osculating_circles.png', dpi=300)
 
 
-    def _set_matplotlib(self):
+    def _set_matplotlib(self) -> Tuple[matplotlib.figure.Figure, Union[matplotlib.axes.Axes, List[matplotlib.axes.Axes]]]:
         """Set matplotlib defaults."""
         sns.set_style("ticks")
         plt.rcParams["font.family"] = "Times New Roman"
@@ -373,9 +390,6 @@ class EssentialDynamicsPlotter:
         fig, axes = plt.subplots(1, num_pca_combos, figsize=self.config.figsize)
         if num_pca_combos == 1:
             axes = [axes]
-        self.labels = [""]
-        
-        print("Number of samples: " + str(len(self.samples)))
         
         return fig, axes
 

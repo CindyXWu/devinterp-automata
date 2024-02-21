@@ -13,6 +13,7 @@ di_automata.egg-info/SOURCES.txt
 di_automata.egg-info/dependency_links.txt
 di_automata.egg-info/top_level.txt
 di_automata/devinterp/__init__.py
+di_automata/devinterp/ed_utils.py
 di_automata/devinterp/rlct_utils.py
 di_automata/devinterp/mechinterp/__init__.py
 di_automata/devinterp/mechinterp/activations.py

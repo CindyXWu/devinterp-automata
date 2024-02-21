@@ -4,6 +4,7 @@ from pathlib import Path
 from functools import partial
 import shutil
 import time
+import pickle
 from einops import rearrange
 from sklearn.decomposition import PCA
 import pandas as pd
@@ -29,17 +30,13 @@ from di_automata.devinterp.ed_utils import EssentialDynamicsPlotter
 Sweep = TypeVar("Sweep")
 
 
-image_folder = Path(__file__).parent / "images"
-rlct_folder = Path(__file__).parent / "rlct_data"
-logit_folder = Path(__file__).parent.parent.parent.parent / "logits"
-
-
 class PostRunSLT:
     def __init__(self, slt_config: PostRunSLTConfig):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
         self.slt_config: PostRunSLTConfig = slt_config
-        
+
+        # Run path and name for easy referral later
         self.run_path = f"{slt_config.entity_name}/{slt_config.wandb_project_name}-alpha"
         self.run_name = slt_config.run_name
         
@@ -58,7 +55,9 @@ class PostRunSLT:
         except: self.history = self.run_api.history
         self.loss_history = self.history["Train Loss"]
         self.accuracy_history = self.history["Train Acc"]
-        
+        self.steps = self.history["_step"]
+
+        # Get full config logged for the run we are analysing off WandB
         # My logic for picking 100 here is it's probably going to exist, but this might cause errors
         try:
             self.config: MainConfig = self._get_config()
@@ -69,7 +68,7 @@ class PostRunSLT:
         self.slt_config.rlct_config.sgld_kwargs.num_samples = self.slt_config.rlct_config.num_samples = self.config.rlct_config.sgld_kwargs.num_samples
         self.slt_config.nano_gpt_config = self.config.nano_gpt_config
         
-        # Now that you have config, log config etc again and set a new run going to write the RLCT information to
+        # Now that you have config, log config again. Set new run to write RLCT information to
         self._set_logger()
         
         self.ed_loader = create_dataloader_hf(self.config, deterministic=True) # Make sure deterministic to see same data
@@ -77,10 +76,7 @@ class PostRunSLT:
         self.model, param_inf_properties = construct_model(self.config)
         
         self.rlct_data_list: list[dict[str, float]] = []
-        self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
-        self.rlct_folder.mkdir(parents=True, exist_ok=True)
         self.rlct_criterion = construct_rlct_criterion(self.config)
-        
         self.ed_logits = []
     
     
@@ -89,18 +85,14 @@ class PostRunSLT:
         if self.slt_config.ed:
             self._load_ed_logits()
             self._truncate_ed_logits()
-            self._ed_calculation()
+            ed_projected_samples = self._ed_calculation()
             
             # Create and call instance of essential dynamics osculating circle plotter
-            ed_plotter = EssentialDynamicsPlotter(self.slt_config.ed_plot_config)
-            ed_plotter.smooth_all_components()
-            ed_plotter.plot_osculating_main()
-            wandb.log("ed_osculating", wandb.Image("ed_osculating_circles.png"))
-    
+            ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, self.steps, self.slt_config.ed_plot_config, self.run_name)
+            wandb.log({"ed_osculating": wandb.Image("ed_osculating_circles.png")})
+
         if self.slt_config.llc:
             self._rlct()
-        
-        self._finish_run()
     
     
     def _restore_states(self, idx: int) -> None:
@@ -173,7 +165,7 @@ class PostRunSLT:
                 increases = 0
         
     
-    def _ed_calculation(self) -> None:
+    def _ed_calculation(self) -> np.ndarray:
         """PCA and plot part of ED.
         
         Diplay top 3 components against each other and show fraction variance explained.
@@ -182,7 +174,7 @@ class PostRunSLT:
         pca.fit(self.ed_logits.cpu().numpy())
         
         # Projected coordinates for plotting purposes
-        pca_projected_samples = np.empty((len(self.ed_logits, 3)))
+        pca_projected_samples = np.empty((len(self.ed_logits), 3))
         for i, row in enumerate(self.ed_logits):
             logits_epoch = rearrange(row, 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
@@ -197,8 +189,12 @@ class PostRunSLT:
             "explained_var_truncated": wandb.Image("pca_explained_var.png"),
         })
         
-        torch.save(pca_projected_samples, self.slt_config.ed_plot_config.ed_folder / f"pca_projected_samples_{self.config.run_name}.torch")
-        
+        pca_samples_file_path = f"pca_projected_samples_{self.config.run_name}.pkl"
+        with open(pca_samples_file_path, 'wb') as f:
+            pickle.dump(pca_projected_samples, f)
+
+        return pca_projected_samples
+                
     
     def _rlct(self):
         """Estimate RLCTs from a set of checkpoints after training, plot and dump graph on WandB."""
@@ -227,14 +223,16 @@ class PostRunSLT:
             self.rlct_data_list.append(results_filtered)
         
         rlct_df = pd.DataFrame(self.rlct_data_list)
-        rlct_df.to_csv(rlct_folder / f"{self.config.run_name}.csv")
-        rlct_artifact = wandb.Artifact(f"rlct", type="rlct", description="RLCT diagnostics.")
-        rlct_artifact.add_file(rlct_folder / f"{self.config.run_name}.csv")
+        rlct_df.to_csv(f"rlct_{self.config.run_name}.csv")
+        rlct_artifact = wandb.Artifact(f"rlct", type="rlct", description="All RLCT data.")
+        rlct_artifact.add_file(f"rlct_{self.config.run_name}.csv")
         wandb.log_artifact(rlct_artifact, aliases=[f"rlct_{self.config.run_name}"])
     
     
     def _set_logger(self) -> None:
-        """Call at initialisation to set loggers to WandB and/or AWS."""
+        """Call at initialisation to set loggers to WandB and/or AWS.
+        Run naming convention is preprend 'post' to distinguish from training runs.
+        """
         # Add previous run id to tie runs together
         self.config["prev_run_path"] = f"{self.run_path}/{self.run_api.id}"
         logger_params = {
@@ -250,29 +248,13 @@ class PostRunSLT:
         self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
         
         
-    def _finish_run(self):
+    def finish_run(self):
         if self.config.is_wandb_enabled:
             wandb.finish()
         
-            upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
-            if upload_cache_dir.is_dir():
-                shutil.rmtree(upload_cache_dir)
+            # upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
+            # if upload_cache_dir.is_dir():
+            #     shutil.rmtree(upload_cache_dir)
                 
             time.sleep(60)
             shutil.rmtree("wandb")
-        
-    
-    def _del_wandb_cache(self):
-        command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
-        try:
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except:
-            print("Cache file deletion skipped.")
-            
-        for cache_dir in self.wandb_cache_dirs:
-            if cache_dir.is_dir():
-                try: 
-                    shutil.rmtree(cache_dir)
-                    print(f"Removed {cache_dir}")
-                except OSError as e: 
-                    print(f"Failed to remove dir {cache_dir}.", e)

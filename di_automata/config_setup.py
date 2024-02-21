@@ -456,12 +456,12 @@ class WandBConfig(BaseModel):
 
 
 class EDPlotConfig(BaseModel):
-    transitions: Optional[Tuple[int, int, int]] = Field(default=None, description="List of tuples (start, end, stage), representing the starting point, ending point, and a stage or condition of each unique phase identified from ED plot.")
+    transitions: Optional[Tuple[int, int, int]] = Field(default=None, description="List of tuples (start, end, stage), representing the starting point, ending point, and a stage or condition of each unique phase identified from ED plot. These points should have units of native iteration as the step, not checkpoint index (to make it easier to compare with WandB graphs).")
     colors: Optional[List[Tuple[int]]] = Field(default=None, description="List of RGB tuples for each state.")
     num_pca_components: int = 3
     plot_caustic: bool = True
     figsize: Tuple[int, int] = (20, 6)
-    marked_cusp_data: Optional[bool] = Field(default=True)
+    marked_cusp_data: Optional[dict[str, Union[float, int]]] = Field(default=None, description="Key: ['step','influence_start','influence_end'], values are floats defining these. Not important for plotting, but seems to mark cusps.")
     use_cache: bool = False
     num_sharp_points: int = 20
     num_vertices: int = 35

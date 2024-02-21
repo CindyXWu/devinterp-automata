@@ -58,7 +58,7 @@ ed_plot_config:
   num_pca_components: 3
   plot_caustic: true
   figsize: [20, 6]
-  marked_cusp_data: true
+  marked_cusp_data: null
   use_cache: false
   num_sharp_points: 20
   num_vertices: 35

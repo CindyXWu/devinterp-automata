@@ -23,6 +23,7 @@ def main(config: PostRunSLTConfig) -> None:
 
     post_run = PostRunSLT(omegaconf_config)
     post_run.run_slt()
+    post_run.finish_run()
     
     
 if __name__ == "__main__":
