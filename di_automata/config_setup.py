@@ -10,7 +10,7 @@ from di_automata.devinterp.optim.sgld_ma import SGLD_MA
 
 class ModelType(str, Enum):
     NANO_GPT = "NANO_GPT"
-    TFL_GPT2 = "TRANSFORMERLENS_GPT2_SMALL"
+    TF_LENS = "TF_LENS"
 
 
 class DatasetType(str, Enum):
@@ -102,6 +102,17 @@ class NanoGPTConfig(BaseModel):
     is_causal: bool = False
     bias: bool = Field(default=True, description="True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster.")
         
+
+class HookedTransformerConfig(BaseModel):
+    d_model: int
+    d_head: int
+    n_heads: int
+    d_mlp: int
+    n_ctx: int  = Field(default=514, description="Set by root validator based on task. For scratchpad training, if input context is N, this should be 2 * N + 2.")
+    n_layers: int
+    d_vocab: int  = Field(default=None, description="Set by root validator. For scratchpad training, if N is output vocab size, this should be 2 * N + 1.")
+    act_fn: str = Field(default="relu")
+    
     
 class OptimizerConfig(BaseModel):
     optimizer_type: OptimizerType = Field(default=OptimizerType.ADAM)
@@ -114,7 +125,6 @@ class OptimizerConfig(BaseModel):
     clip_grad: float = Field(default=float("inf"))
     cosine_lr_schedule: bool = Field(default=False)
     dropout: float = Field(default=0.0)
-    # To do: consider usign EMA as detailed in paper
     
     
 class DataLoaderConfig(BaseModel):
@@ -140,6 +150,8 @@ class DatasetConfig(BaseModel):
     random_length: Optional[bool] = Field(default=False, description="Whether to use random length sequences, in which case take length attribute as max.")
     seed: Optional[int] = Field(default=None)
     pad_token: Optional[int] = Field(default=1, description="If specified, pad sequences by this length.")
+    # vocab_size: Optional[int] = Field(default=None, description="Set by root validator. Input vocab size of transformer.")
+    # output_vocab_size: Optional[int] = Field(default=None, description="Set by root validator. Output vocab size of transformer.")
     
     @property
     def dataset_filename(self):
@@ -480,7 +492,6 @@ class MainConfig(BaseModel):
     ## Other config classes
     # Leave class type for task config open and instantiate properly in root validator
     task_config: dict
-    nano_gpt_config: Optional[NanoGPTConfig]
     rlct_config: Optional[RLCTConfig]
     wandb_config: WandBConfig = Field(default_factory=WandBConfig)
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
@@ -491,10 +502,17 @@ class MainConfig(BaseModel):
     model_save_method: str = Field(default="aws", description="How to save model - [local, aws, wandb]")
     aws_bucket: str = Field(default="s3://automata-devinterp-01/my_checkpoints/", description="Bucket name for AWS S3.")
     
+    # Models
+    nano_gpt_config: Optional[NanoGPTConfig]
+    tflens_config: Optional[HookedTransformerConfig]
+    
     ## Training bits and bobs
+    # Flags
     llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")
     ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
     use_ema: bool = Field(default=True, description="Whether to use exponential moving average of model parameters.")
+    use_scratchpad: bool = Field(default=True, description="Whether to use scratchpad training with recency bias as in Liu et al 'Transformers Learn Shortcuts to Automata' https://arxiv.org/abs/2210.10749")
+    # Other
     ema_decay: float = Field(default=0.9, description="Decay factor for EMA.")
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
@@ -518,9 +536,14 @@ class MainConfig(BaseModel):
             v (dict): Stores attributes of MainConfig object.
         """
         # Instantiate correct class for task config
-        task_config = v["task_config"]
+        task_config = v.get("task_config")
+        assert task_config is not None, "Task config not specified."
+        
         config_class = config_class_map[task_config["dataset_type"]]
         task_config_instance = config_class(**task_config)
+        # Add input and output vocab size to task_config!
+        v["task_config"]["output_vocab_size"] = task_config_instance.output_vocab_size
+        v["task_config"]["vocab_size"] = task_config_instance.vocab_size
         
         if not v["eval_frequency"]:
             v["eval_frequency"] = task_config["size"]
@@ -532,14 +555,18 @@ class MainConfig(BaseModel):
         # Set cosine LR schedule final value
         v["optimizer_config"]["final_lr"] = float(v["optimizer_config"]["default_lr"]) / 10
         
-        # Adjust NanoGPTConfig based on DatasetConfig
-        if v["nano_gpt_config"] and task_config:
-            nano_gpt_config = v["nano_gpt_config"]
-            nano_gpt_config["block_size"] = task_config["length"] + 1 # Add one for adder class in case of carry
+        # Adjust NanoGPTConfig based on task_config
+        if v.get("nano_gpt_config") and task_config:
+            v["nano_gpt_config"]["block_size"] = task_config["length"] + 1 # Add one for adder class in case of carry
             # The next two are properties and instiated only when a Pydantic object is created - do not access through values directly
-            nano_gpt_config["vocab_size"] = task_config_instance.vocab_size
-            nano_gpt_config["output_vocab_size"] = task_config_instance.output_vocab_size
-            v["nano_gpt_config"] = nano_gpt_config
+            # Necessary as we don't know which class task_config belongs to when instantiated, until we map via task_config_map to correct config, using dataset_type as key
+            v["nano_gpt_config"]["vocab_size"] = task_config_instance.vocab_size if not v["use_scratchpad"] else 2 * task_config_instance.vocab_size + 2
+            v["nano_gpt_config"]["output_vocab_size"] = task_config_instance.output_vocab_size if not v["use_scratchpad"] else task_config_instance.output_vocab_size * 2 + 1
+        
+        # Adjust HookedTransformer config based on task_config
+        if v.get("tflens_config") and task_config:
+            v["tflens_config"]["n_ctx"] = task_config_instance.length if not v["use_scratchpad"] else 2 * task_config_instance.length + 2
+            v["tflens_config"]["d_vocab"] = max(task_config_instance.output_vocab_size, task_config_instance.vocab_size) if not v["use_scratchpad"] else max(task_config_instance.output_vocab_size, task_config_instance.vocab_size) * 2 + 1
         
         # Adjust RLCT parameters
         rlct_config = v["rlct_config"]
@@ -594,7 +621,6 @@ class PostRunSLTConfig(BaseModel):
         # Instantiate correct class for task config
         task_config = v["task_config"]
         config_class = config_class_map[task_config["dataset_type"]]
-        task_config_instance = config_class(**task_config)
         
         ## For new run names
         # v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"

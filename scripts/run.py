@@ -25,6 +25,7 @@ def main(config: MainConfig) -> None:
     
     # Convert OmegaConf object to dictionary before passing into Pydantic
     OmegaConf.resolve(config)
+    OmegaConf.set_struct(config, False)
     # Convert OmegaConf object to MainConfig Pydantic model for dynamic type validation - NECESSARY DO NOT SKIP
     pydantic_config = MainConfig(**config)
     # Convert back to OmegaConf object for compatibility with existing code

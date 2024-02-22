@@ -11,11 +11,13 @@ import contextlib
 import subprocess
 from omegaconf import OmegaConf
 from functools import partial
+from einops import rearrange
 import s3fs
 import pandas as pd
 import math
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -37,6 +39,7 @@ from di_automata.constructors import (
     create_dataloader_hf,
     construct_rlct_criterion,
     get_state_dict,
+    SchedulerType,
 )
 Sweep = TypeVar("Sweep")
 
@@ -54,6 +57,7 @@ class Run:
         self.config = config
         
         self.train_loader = create_dataloader_hf(self.config, deterministic=False)
+        self.eval_loader = create_dataloader_hf(self.config, deterministic=True)
         
         self.model, param_inf_properties = construct_model(config)
         self.model.to(self.device)
@@ -81,11 +85,13 @@ class Run:
         
         # Now that WandB run is initialised, save config as artifact
         self._save_config()
-    
+        
+        # Concurrent IO, bound to class instance
+        self.executor = ThreadPoolExecutor(max_workers=30)
+
     
     def train(self) -> None:
         criterion = nn.CrossEntropyLoss()
-        self.train_acc_list, self.train_loss_list = [], []
         self.model.train()
         self.progress_bar = tqdm(total=self.config.num_training_iter)
         self.idx, self.epoch = 0, 0
@@ -104,9 +110,13 @@ class Run:
                 iter_model_saved = False
                 self.idx += 1 # TODO: move this to end of loop for easier analysis indexing (always log step 0)
                 inputs, labels = data["input_ids"].to(self.device), data["label_ids"].to(self.device)
+                
                 logits = self.model(inputs)
 
                 self.optimizer.zero_grad()
+                # Some architectures have output defined in 'wrong order' for my loss fn
+                if not logits.shape[1] == self.config.task_config.output_vocab_size:
+                    logits = rearrange(logits, 'b c s -> b s c')
                 loss = criterion(logits, labels.long())
                 detached_loss = loss.detach().cpu().item()
                 loss.backward()
@@ -120,24 +130,32 @@ class Run:
                 train_loss.append(detached_loss)
                 self.progress_bar.update()
                 
+                # For ED: save model but do not log other metrics at this frequency
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
-                    self._save_model() # Save model but do not log other metrics at this frequency
+                    self.executor.submit(
+                        self._save_model,
+                        self.model,
+                        self.optimizer,
+                        self.scheduler,
+                        self.ema,
+                        self.idx,
+                    )
                     iter_model_saved = True
                 
-            train_loss, train_acc = self._evaluation_step()
+            train_acc, train_loss, eval_acc, eval_loss = self._evaluation_step(eval=False)
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
             
             # Early logit saving in case run crashes
             if train_acc > 80 and epoch % 5 == 0:
                 self._save_logits()
                 
-            # Early-stopping
-            if math.log(train_loss) < math.log(best_loss):
-                best_loss = train_loss
+            # Early-stopping using evaluation set (deterministic and full-dataset evaluation)
+            if math.log(eval_loss) < math.log(best_loss):
+                best_loss = eval_loss
                 no_improve_count = 0
             else:
                 no_improve_count += 1
-            if no_improve_count >= self.config.early_stop_patience or train_acc > self.config.early_stop_acc_threshold:
+            if no_improve_count >= self.config.early_stop_patience or eval_acc > self.config.early_stop_acc_threshold:
                 print(f"Early stopping: log loss has not decreased in {self.config.early_stop_patience} steps.")
                 return
 
@@ -180,22 +198,22 @@ class Run:
         wandb.log_artifact(rlct_artifact, aliases=[f"rlct_distill_{self.config.rlct_config.use_distill_loss}"])
     
     
-    def _evaluation_step(self) -> tuple[float, float]:
-        """TODO: consider test accuracy and loss."""
-        train_acc, train_loss = evaluate(
-            model=self.model, 
-            data_loader=self.train_loader, 
-            num_eval_batches=self.config.num_eval_batches,
-            ema=self.ema if self.config.use_ema else None,
-        )
-        self.train_acc_list.append(train_acc)
-        self.train_loss_list.append(train_loss)
+    def _evaluation_step(self) -> tuple[float, float, float, float]:
+        """Calculate and log train and test accuracy/loss to WandB.
+        
+        Both train and eval use on order of >100 batches, but the only difference is train draws fresh samples each time, whereas eval keeps the same evaluation dataset.
+        
+        For this reason, train uses 5 times fewer batches, since it's supposed to be stochastic.
+        """
+        eval_func = partial(evaluate, model=self.model, ema=self.ema if self.config.use_ema else None)
+        train_acc, train_loss = eval_func(data_loader=self.train_loader, num_eval_batches=self.config.num_eval_batches // 10)
+        eval_acc, eval_loss = eval_func(data_loader=self.eval_loader, num_eval_batches=self.config.num_eval_batches)
         
         self.progress_bar.set_description(f'Project {self.config.wandb_config.wandb_project_name}, Epoch: {self.epoch}, Train Accuracy: {train_acc}, Train Loss: {train_loss}, LR {self.lr}')
         
-        wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "LR": self.scheduler.get_lr()}, step=self.idx)
+        wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "Eval Acc": eval_acc, "Eval Loss": eval_loss, "LR": self.scheduler.get_lr()}, step=self.idx)
         
-        return train_loss, train_acc
+        return train_acc, train_loss, eval_acc, eval_loss
 
 
     def _save_config(self) -> None:
@@ -207,15 +225,15 @@ class Run:
         wandb.log_artifact(model_artifact, aliases=[f"{self.config.run_name}"])
             
             
-    def _save_model(self) -> None:
+    def _save_model(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: SchedulerType, ema: ExponentialMovingAverage, idx: int) -> None:
         """Checkpoint model to AWS, WandB or local. Latter two not recommended due to frequency of ED checkpoints."""
-        context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
-        # Saving moving average weights in state dict
+        context_manager = ema.average_parameters() if self.config.use_ema else no_op_context()
+        
         with context_manager:
-            model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
-            state = get_state_dict(model_to_save, self.optimizer, self.scheduler, self.ema)
+            model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
+            state = get_state_dict(model_to_save, optimizer, scheduler, ema)
             torch.save(
-                state, # Save optimizer, model and scheduler all in one go
+                state, # Save optimizer, model, scheduler, EMA all in one go
                 Path(".") / "states.torch", # Working directory configured by Hydra as output directory
             )
         
@@ -223,16 +241,16 @@ class Run:
             case "wandb":
                 model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
                 model_artifact.add_file(f"states.torch")
-                wandb.log_artifact(model_artifact, aliases=[f"idx{self.idx}_{self.config.run_name}_{self.config.time}"])
+                wandb.log_artifact(model_artifact, aliases=[f"idx{idx}_{self.config.run_name}_{self.config.time}"])
                 os.remove("states.torch") # Delete file to prevent clogging up
             case "aws":
                 with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{self.idx}.pth', mode='wb') as file:
                     torch.save(state, file)
                 print("Saved model to AWS")
-            case "local":
-                file_path =  self.model_save_dir / f"{self.config.run_name}"
-                data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
-                torch.save(dict(state, **data), f"{file_path}.torch")
+            # case "local":
+            #     file_path =  self.model_save_dir / f"{self.config.run_name}"
+            #     data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
+            #     torch.save(dict(state, **data), f"{file_path}.torch")
         
         # Only delete cache every 20 steps to prevent race condition with WandB's upload thread
         if self.idx % 20 == 0 and self.config.model_save_method == "wandb":
@@ -287,6 +305,9 @@ class Run:
                 
             time.sleep(60)
             shutil.rmtree("wandb")
+        
+        # Shut down concurrent IO executor
+        self.executor.shutdown(wait=True)
         
     
     def _del_wandb_cache(self):

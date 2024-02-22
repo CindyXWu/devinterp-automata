@@ -1,6 +1,7 @@
 from typing import Union, Optional, Dict, TypedDict
 import numpy as np
 import logging
+from transformer_lens import HookedTransformerConfig, HookedTransformer
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -60,6 +61,18 @@ def construct_model(config: MainConfig) -> tuple[nn.Module, dict[str, InfParam]]
                 ),
             ],
             output_weights_names=[get_param_name(model, model.unembedding[-1].weight)],  # type: ignore
+        )
+    elif config.model_type == ModelType.TF_LENS:
+        model = HookedTransformer(HookedTransformerConfig(**config.tflens_config))
+        param_inf_types = get_inf_types(
+            model=model,
+            input_weights_names=[
+                get_param_name(model, model.W_E),
+                get_param_name(model, model.W_pos)
+            ],
+            output_weights_names=[
+                get_param_name(model, model.W_U),
+            ],
         )
     else:
         raise ValueError(f"Unknown architecture type: {config.model_type}")

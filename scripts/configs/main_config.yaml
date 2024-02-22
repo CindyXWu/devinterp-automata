@@ -1,12 +1,13 @@
 defaults:
   - task_config: adder
 
-model_type: NANO_GPT
-parameterisation: MUP
+model_type: TF_LENS
+parameterisation: SP
 
 llc_train: false
 ed_train: true
 use_ema: true
+use_scratchpad: false
 
 model_save_method: aws
 aws_bucket: s3://automata-devinterp-01/my_checkpoints/
@@ -14,7 +15,7 @@ aws_bucket: s3://automata-devinterp-01/my_checkpoints/
 num_training_iter: 14000
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
 ema_decay: 0.9
-num_eval_batches: 20
+num_eval_batches: 100
 early_stop_patience: 20
 early_stop_acc_threshold: 99.9
 
@@ -74,7 +75,7 @@ dataloader_config:
   shuffle_train: true
 
 nano_gpt_config:
-  block_size: 100
+  block_size: 100 # Will be updated automatically based on dataset
   vocab_size: 4 # Will be updated automatically based on dataset
   output_vocab_size: 2 # Will be updated automatically based on dataset
   n_layers: 10
@@ -83,6 +84,16 @@ nano_gpt_config:
   dropout: 0.0
   is_causal: true
   bias: true
+
+tflens_config:
+  d_model: 256
+  d_head: 64
+  n_heads: 4 # Will be updated automatically based on dataset
+  d_mlp: 1024
+  n_ctx: null # Will be updated automatically based on dataset
+  n_layers: 3
+  d_vocab: null # Will be updated automatically based on dataset
+  act_fn: relu
 
 wandb_config:
   log_to_wandb: true
