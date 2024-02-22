@@ -16,6 +16,7 @@ from sklearn.decomposition import PCA
 import pandas as pd
 import math
 import time
+from datetime import datetime
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -76,6 +77,11 @@ class Run:
         self.rlct_criterion = construct_rlct_criterion(self.config)
         
         self.ed_logits = []
+        
+        # Set time and use it as a distinguishing parameter for this run
+        now = datetime.now()
+        time_str = now.strftime("%Y-%m-%d %H:%M")
+        self.config["time"] = time_str
         
         self._set_logger()
         
@@ -184,7 +190,7 @@ class Run:
         torch.save(concat_logit_matrix, "logits")
         logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
         logit_artifact.add_file("logits", name="logits_artifact")
-        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}"])
+        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
         if os.path.exists("logits"): # Delete logits as these can take up to 30GB of storage
             os.remove("logits")
         self._del_wandb_cache()
@@ -265,7 +271,7 @@ class Run:
         if self.config.wandb_config.save_model_as_artifact is True:
             model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
             model_artifact.add_file(f"states.torch")
-            wandb.log_artifact(model_artifact, aliases=[f"idx{self.idx}_{self.config.run_name}"])
+            wandb.log_artifact(model_artifact, aliases=[f"idx{self.idx}_{self.config.run_name}_{self.config.time}"])
             os.remove("states.torch") # Delete file to prevent clogging up
         else:
             file_path =  self.model_save_dir / f"{self.config.run_name}"
@@ -302,8 +308,7 @@ class Run:
         wandb.config.model_type = self.config.model_type
         
         # Location on remote GPU of WandB cache to delete periodically
-        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
-        """We also have "root/.local/share/wandb/artifacts", but this can't be deleted as often as doing so prevents proper upload of model checkpoints. Delete in finish_run() below."""
+        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.local/share/wandb/artifacts/staging", Path.home() / "root/.cache/wandb/artifacts/obj"]
         
         
     def finish_run(self) -> None:
@@ -318,10 +323,10 @@ class Run:
         if self.config.is_wandb_enabled:
             wandb.finish()
             
-            upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
-            if upload_cache_dir.is_dir():
-                shutil.rmtree(upload_cache_dir)
-            
+            for dir in self.wandb_cache_dirs:
+                if dir.is_dir():
+                    shutil.rmtree(dir)
+                
             time.sleep(60)
             shutil.rmtree("wandb")
         
@@ -332,14 +337,6 @@ class Run:
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except:
             print("Cache file deletion skipped.")
-            
-        for cache_dir in self.wandb_cache_dirs:
-            if cache_dir.is_dir():
-                try: 
-                    shutil.rmtree(cache_dir)
-                    print(f"Removed {cache_dir}")
-                except OSError as e: 
-                    print(f"Failed to remove dir {cache_dir}.", e)
                     
                     
     def _restore_model(self, resume_training: bool = False) -> None:

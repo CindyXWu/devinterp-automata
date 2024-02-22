@@ -3,25 +3,25 @@
 # This script can optionally manage the main config name via command line passing to Hydra
 SCRIPT_PATH="run.py"
 
-task="quaternion"
+task="dihedral"
 # task="dihedral,permutation_reset,cyclic,symmetric"
 # task="abab,flipflop,parity"
 # task="quaternion,gridworld,alternating"
 
 # Whether to log particular things
 llc_train="False"
-ed_train="False"
+ed_train="True"
 
 # Hyperparams
-lr="1e-4,1e-5,1e-6"
+lr=1e-4
 its=15000
 eval_f=50
-layers=10
-seq_len="100"
+layers=4
+seq_len=25
 
 # RLCT
 chains=5
-ed_eval_f=200
+ed_eval_f=2
 rlct_lr=1e-8
 weight_decay=1e-8
 chain_len=3500

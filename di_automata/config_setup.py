@@ -584,6 +584,7 @@ class PostRunSLTConfig(BaseModel):
     wandb_project_name: str = Field(default="devinterp-automata")
     entity_name: str = Field(default="wu-cindyx", description="Either WandB username or name of team.")
     run_name: Optional[str] = Field(default=None, description="Set by validator.")
+    run_idx: int = Field(default=0, description="Counting back from runs with the same name in time, which run do you want to select?")
     
     @root_validator(pre=True)
     def _set_fields(cls, v: dict):

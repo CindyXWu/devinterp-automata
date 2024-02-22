@@ -5,7 +5,7 @@ model_type: NANO_GPT
 parameterisation: MUP
 
 llc_train: true
-ed_train: false
+ed_train: true
 use_ema: true
 
 num_training_iter: 14000
@@ -84,7 +84,7 @@ nano_gpt_config:
 wandb_config:
   log_to_wandb: true
   save_model_as_artifact: true
-  wandb_project_name: devinterp-automata-alpha
+  wandb_project_name: devinterp-automata
   sweep: false
   entity_name: wu-cindyx
 

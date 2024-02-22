@@ -56,7 +56,6 @@ tqdm
 matplotlib-label-lines
 matplotlib
 plotnine
-pickle5
 scipy
 scikit-learn
 einops

@@ -50,7 +50,7 @@ class PostRunSLT:
                 },
             order="created_at", # Default descending order so backwards in time
         )
-        self.run_api = run_list[0]
+        self.run_api = run_list[slt_config.run_idx]
         try: self.history = self.run_api.history()
         except: self.history = self.run_api.history
         self.loss_history = self.history["Train Loss"]
@@ -233,6 +233,7 @@ class PostRunSLT:
         """Call at initialisation to set loggers to WandB and/or AWS.
         Run naming convention is preprend 'post' to distinguish from training runs.
         """
+        self.config["slt_config"] = self.slt_config # For saving to WandB
         # Add previous run id to tie runs together
         self.config["prev_run_path"] = f"{self.run_path}/{self.run_api.id}"
         logger_params = {
