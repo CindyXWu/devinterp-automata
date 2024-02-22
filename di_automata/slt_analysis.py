@@ -5,11 +5,11 @@ from functools import partial
 import shutil
 import time
 import pickle
+import os
 from einops import rearrange
 from sklearn.decomposition import PCA
 import pandas as pd
 import numpy as np
-import subprocess
 from omegaconf import OmegaConf
 
 import torch
@@ -26,6 +26,8 @@ from di_automata.constructors import (
     create_dataloader_hf,
     construct_rlct_criterion,
 )
+from di_automata.tasks.data_utils import take_n
+from di_automata.io import read_tensors_from_file, append_tensor_to_file
 from di_automata.devinterp.ed_utils import EssentialDynamicsPlotter
 Sweep = TypeVar("Sweep")
 
@@ -73,15 +75,15 @@ class PostRunSLT:
         
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_criterion = construct_rlct_criterion(self.config)
-        self.ed_logits = []
+        self.logits_path = "logits.bin" # Binary file
     
     
     def run_slt(self):
         """Main executable function of this class."""
         if self.slt_config.ed:
-            self._load_ed_logits()
-            self._truncate_ed_logits()
-            ed_projected_samples = self._ed_calculation()
+            ed_logits: list[torch.Tensor] = self._get_ed_logits_from_checkpoints()
+            ed_logits: list[torch.Tensor] = self._truncate_ed_logits(ed_logits)
+            ed_projected_samples = self._ed_calculation(ed_logits)
             
             # Create and call instance of essential dynamics osculating circle plotter
             ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, self.steps, self.slt_config.ed_plot_config, self.run_name)
@@ -91,17 +93,20 @@ class PostRunSLT:
             self._rlct()
     
     
-    def _restore_states(self, idx: int) -> None:
+    def _restore_states(self, idx: int) -> dict:
         """Restore model state from a checkpoint. Called once for every epoch.
         
         Params:
             idx: Index in steps.
+            
+        Returns:
+            model state dictionary.
         """
         artifact = self.run.use_artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
         data_dir = artifact.download()
         model_state_path = Path(data_dir) / "states.torch"
         states = torch.load(model_state_path)
-        self.model_state_dict = states["model"]
+        return states["model"]
 
     
     def _get_config(self) -> MainConfig:
@@ -117,24 +122,54 @@ class PostRunSLT:
         return OmegaConf.load(config_path)
     
     
-    def _load_ed_logits(self) -> None:
-        """Load ED logits from WandB."""
-        # artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
-        artifact = self.api.artifact(f"{self.run_path}/logits:test")
-        data_dir = artifact.download()
-        logit_path = Path(data_dir) / "logits_artifact"
-        self.ed_logits = torch.load(logit_path)
+    # def _load_ed_logits(self) -> None:
+    #     """Load ED logits from WandB."""
+    #     # artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
+    #     artifact = self.api.artifact(f"{self.run_path}/logits:test")
+    #     data_dir = artifact.download()
+    #     logit_path = Path(data_dir) / "logits_artifact"
+    #     self.ed_logits = torch.load(logit_path)
     
     
-    def _truncate_ed_logits(self) -> None:
+    def _get_ed_logits_from_checkpoints(self) -> list[torch.Tensor]:
+        """For each checkpoint, do forward pass to obtain logits and save.
+        Note checkpoint weights were saved with EMA if config.use_ema is True.
+        """
+        ed_logits = []
+        
+        for checkpoint_idx in range(1, self.config.num_training_iter // self.config.rlct_config.ed_config.eval_frequency):
+            idx = checkpoint_idx * self.config.rlct_config.ed_config.eval_frequency
+            state_dict = self._restore_states(idx)
+            self.model.load_state_dict(state_dict)
+            
+            logits_epoch = []
+            with torch.no_grad():
+                for data in take_n(self.ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
+                    inputs = data["input_ids"].to(self.device)
+                    logits = self.model(inputs)
+                    # Flatten over batch, class and sequence dimension
+                    logits_epoch.append(rearrange(logits, 'b c s -> (b c s)'))
+            
+            # Concat all per-batch logits over batch dimension to form one super-batch
+            self.logits_epoch = torch.cat(logits_epoch)
+            
+            # # Append to binary file
+            # append_tensor_to_file(self.logits_epoch, self.logits_path)
+            
+            ed_logits.append(self.logits_epoch)
+        
+        return ed_logits
+        
+    
+    def _truncate_ed_logits(self, ed_logits: list[torch.Tensor]) -> None:
         """Truncate run to clean out overtraining at end for cleaner ED plots.
         Determines the cutoff index for early stopping based on log loss.
         """
         # Manually specify cutoff index
         if self.slt_config.truncate_its is not None:
             total_its = len(self.loss_history) * self.config.eval_frequency
-            ed_logit_cutoff_idx = len(self.ed_logits) * self.slt_config.truncate_its // total_its
-            self.ed_logits = self.ed_logits[:ed_logit_cutoff_idx]
+            ed_logit_cutoff_idx = len(ed_logits) * self.slt_config.truncate_its // total_its
+            ed_logits = ed_logits[:ed_logit_cutoff_idx]
             return
         
         # Automatically calculate cutoff index using early-stop patience
@@ -149,22 +184,29 @@ class PostRunSLT:
                     # Index where the increase trend starts
                     cutoff_idx = (i - self.slt_config.early_stop_patience + 1) * self.config.eval_frequency # Cutoff idx in loss step
                     ed_logit_cutoff_idx = cutoff_idx * self.config.rlct_config.ed_config.eval_frequency // self.config.eval_frequency
-                    self.ed_logits = self.ed_logits[:ed_logit_cutoff_idx]
+                    ed_logits = ed_logits[:ed_logit_cutoff_idx]
             else:
                 increases = 0
         
+        return ed_logits
+        
     
-    def _ed_calculation(self) -> np.ndarray:
+    def _ed_calculation(self, ed_logits: Optional[list[torch.Tensor]]) -> np.ndarray:
         """PCA and plot part of ED.
         
         Diplay top 3 components against each other and show fraction variance explained.
         """
+        if os.path.exists(self.logits_path):
+            ed_logits = read_tensors_from_file(self.logits_path, self.config)
+            # Delete logits as these can take up to 30GB of storage
+            os.remove("logits.bin")
+        
         pca = PCA(n_components=3)
-        pca.fit(self.ed_logits.cpu().numpy())
+        pca.fit(ed_logits.cpu().numpy())
         
         # Projected coordinates for plotting purposes
-        pca_projected_samples = np.empty((len(self.ed_logits), 3))
-        for i, row in enumerate(self.ed_logits):
+        pca_projected_samples = np.empty((len(ed_logits), 3))
+        for i, row in enumerate(ed_logits):
             logits_epoch = rearrange(row, 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
             pca_projected_samples[i] = projected_vector
@@ -182,8 +224,19 @@ class PostRunSLT:
         with open(pca_samples_file_path, 'wb') as f:
             pickle.dump(pca_projected_samples, f)
 
+        ## Try to avoid saving logits to WandB because they can be REAL CHONK (50-100GB PER RUN)
+        # self._save_logits() 
+        
         return pca_projected_samples
-                
+    
+    
+    # def _save_logits(self):
+    #     """Deprecated."""
+    #     logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
+    #     logit_artifact.add_file("logits.bin", name="logits_artifact")
+    #     wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
+    #     self._del_wandb_cache()
+        
     
     def _rlct(self):
         """Estimate RLCTs from a set of checkpoints after training, plot and dump graph on WandB."""
@@ -191,14 +244,14 @@ class PostRunSLT:
 
         for epoch in range(1, self.config.num_epochs): # TODO: currently epochs coincides with evaluations, but may not always be true
             idx = epoch * self.config.eval_frequency
-            self._restore_states(idx)
+            state_dict = self._restore_states(idx)
             
             rlct_func = partial(
                 estimate_learning_coeff_with_summary,
                 loader=train_loader,
                 criterion=self.rlct_criterion,
                 main_config=self.slt_config,
-                checkpoint=self.model_state_dict,
+                checkpoint=state_dict,
                 device=self.device,
             )
 
