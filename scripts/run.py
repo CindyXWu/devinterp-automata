@@ -28,7 +28,7 @@ def main(config: MainConfig) -> None:
     # Convert OmegaConf object to MainConfig Pydantic model for dynamic type validation - NECESSARY DO NOT SKIP
     pydantic_config = MainConfig(**config)
     # Convert back to OmegaConf object for compatibility with existing code
-    omegaconf_config = OmegaConf.create(pydantic_config.dict())
+    omegaconf_config = OmegaConf.create(pydantic_config.model_dump())
 
     run = Run(omegaconf_config)
     run.train()

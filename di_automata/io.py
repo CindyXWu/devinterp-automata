@@ -1,5 +1,6 @@
 import torch
 import io
+import boto3
 
 from di_automata.config_setup import MainConfig
 
@@ -23,10 +24,20 @@ def read_tensors_from_file(file_path: str, config: MainConfig) -> list[torch.Ten
 
     with open(file_path, "rb") as f:
         while True:
-            buffer = io.BytesIO(f.read(tensor_size))  # Read a segment of the file into a buffer
+            buffer = io.BytesIO(f.read(tensor_size))
             if buffer.getbuffer().nbytes == 0:
-                break  # If no bytes were read, end loop
-            buffer.seek(0)  # Ensure the buffer's read pointer is at the start
-            tensor = torch.load(buffer)  # Deserialize the tensor from the buffer
+                break 
+            buffer.seek(0)
+            tensor = torch.load(buffer)
             tensors.append(tensor)
     return tensors
+
+
+def delete_s3_subfolder(bucket_name: str, prefix: str):
+    """Usage:
+    bucket = s3.Bucket('your_bucket_name')
+    prefix = 'path/to/your/subfolder/' 
+    """
+    s3 = boto3.resource('s3')
+    bucket = s3.Bucket(bucket_name)
+    bucket.objects.filter(Prefix=prefix).delete()

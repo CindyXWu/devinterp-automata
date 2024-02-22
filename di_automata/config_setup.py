@@ -442,7 +442,6 @@ class RLCTConfig(BaseModel):
 
 class WandBConfig(BaseModel):
     log_to_wandb: bool = Field(default=True, description="Set to false if testing only.")
-    save_model_as_artifact: bool = Field(default=True, description="If not true, save model state dict and optimizer locally.")
     wandb_project_name: str = Field(default="devinterp-automata")
     entity_name: str = Field(default="wu-cindyx", description="Either WandB username or name of team.")
     sweep: bool = Field(default=False, description="Whether to run a sweep.")
@@ -487,6 +486,10 @@ class MainConfig(BaseModel):
     dataloader_config: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
     initialisation: InitialisationConfig = Field(default_factory=InitialisationConfig)
     optimizer_config: OptimizerConfig = Field(default_factory=OptimizerConfig)
+    
+    # Model saving
+    model_save_method: str = Field(default="aws", description="How to save model - [local, aws, wandb]")
+    aws_bucket: str = Field(default="s3://automata-devinterp-01/my_checkpoints/", description="Bucket name for AWS S3.")
     
     ## Training bits and bobs
     llc_train: bool = Field(default=True, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT during training.")

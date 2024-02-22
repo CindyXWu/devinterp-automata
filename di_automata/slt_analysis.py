@@ -6,6 +6,7 @@ import shutil
 import time
 import pickle
 import os
+import s3fs
 from einops import rearrange
 from sklearn.decomposition import PCA
 import pandas as pd
@@ -30,6 +31,9 @@ from di_automata.tasks.data_utils import take_n
 from di_automata.io import read_tensors_from_file, append_tensor_to_file
 from di_automata.devinterp.ed_utils import EssentialDynamicsPlotter
 Sweep = TypeVar("Sweep")
+
+# AWS
+s3 = s3fs.S3FileSystem()
 
 
 class PostRunSLT:
@@ -102,10 +106,15 @@ class PostRunSLT:
         Returns:
             model state dictionary.
         """
-        artifact = self.run.use_artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
-        data_dir = artifact.download()
-        model_state_path = Path(data_dir) / "states.torch"
-        states = torch.load(model_state_path)
+        match self.config.model_save_method:
+            case "wandb":
+                artifact = self.run.use_artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
+                data_dir = artifact.download()
+                model_state_path = Path(data_dir) / "states.torch"
+                states = torch.load(model_state_path)
+            case "aws":
+                with s3.open(f"{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}") as f:
+                    states = torch.load(f)
         return states["model"]
 
     

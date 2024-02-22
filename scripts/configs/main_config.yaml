@@ -8,6 +8,9 @@ llc_train: false
 ed_train: true
 use_ema: true
 
+model_save_method: aws
+aws_bucket: s3://automata-devinterp-01/my_checkpoints/
+
 num_training_iter: 14000
 eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
 ema_decay: 0.9
@@ -83,7 +86,6 @@ nano_gpt_config:
 
 wandb_config:
   log_to_wandb: true
-  save_model_as_artifact: true
   wandb_project_name: devinterp-automata
   sweep: false
   entity_name: wu-cindyx

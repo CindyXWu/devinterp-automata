@@ -8,11 +8,10 @@ import logging
 import os
 import shutil
 import contextlib
-from einops import rearrange
 import subprocess
 from omegaconf import OmegaConf
 from functools import partial
-from sklearn.decomposition import PCA
+import s3fs
 import pandas as pd
 import math
 import time
@@ -27,9 +26,6 @@ from torch.utils.data import DataLoader
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
     extract_and_save_rlct_data,
-    plot_pca_plotly,
-    plot_explained_var,
-    plot_trace,
 )
 from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import *
@@ -46,6 +42,9 @@ Sweep = TypeVar("Sweep")
 
 # Path to root dir (with setup.py)
 PROJECT_ROOT = Path(__file__).parent.parent
+
+# AWS S3 bucket
+s3 = s3fs.S3FileSystem()
 
 
 class Run:
@@ -76,9 +75,7 @@ class Run:
         self.rlct_criterion = construct_rlct_criterion(self.config)
         
         # Set time and use it as a distinguishing parameter for this run
-        now = datetime.now()
-        time_str = now.strftime("%m_%d_%H_%M")
-        self.config["time"] = time_str
+        self.config["time"] = datetime.now().strftime("%m_%d_%H_%M")
         
         self._set_logger()
         
@@ -211,6 +208,7 @@ class Run:
             
             
     def _save_model(self) -> None:
+        """Checkpoint model to AWS, WandB or local. Latter two not recommended due to frequency of ED checkpoints."""
         context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
         # Saving moving average weights in state dict
         with context_manager:
@@ -221,17 +219,24 @@ class Run:
                 Path(".") / "states.torch", # Working directory configured by Hydra as output directory
             )
         
-        if self.config.wandb_config.save_model_as_artifact is True:
-            model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
-            model_artifact.add_file(f"states.torch")
-            wandb.log_artifact(model_artifact, aliases=[f"idx{self.idx}_{self.config.run_name}_{self.config.time}"])
-            os.remove("states.torch") # Delete file to prevent clogging up
-        else:
-            file_path =  self.model_save_dir / f"{self.config.run_name}"
-            data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
-            torch.save(dict(state, **data), f"{file_path}.torch")
+        match self.config.model_save_method:
+            case "wandb":
+                model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
+                model_artifact.add_file(f"states.torch")
+                wandb.log_artifact(model_artifact, aliases=[f"idx{self.idx}_{self.config.run_name}_{self.config.time}"])
+                os.remove("states.torch") # Delete file to prevent clogging up
+            case "aws":
+                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{self.idx}.pth', mode='wb') as file:
+                    torch.save(state, file)
+                print("Saved model to AWS")
+            case "local":
+                file_path =  self.model_save_dir / f"{self.config.run_name}"
+                data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
+                torch.save(dict(state, **data), f"{file_path}.torch")
         
-        self._del_wandb_cache()
+        # Only delete cache every 20 steps to prevent race condition with WandB's upload thread
+        if self.idx % 20 == 0 and self.config.model_save_method == "wandb":
+            self._del_wandb_cache()
             
             
     def _clean_sweep(self, sweep: "Sweep") -> List["Sweep"]:
@@ -277,7 +282,7 @@ class Run:
             wandb.finish()
             
             upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
-            if upload_cache_dir.is_dir():
+            if upload_cache_dir.is_dir() and self.config.model_save_method == "wandb":
                 shutil.rmtree(upload_cache_dir)
                 
             time.sleep(60)
