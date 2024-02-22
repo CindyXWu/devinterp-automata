@@ -80,7 +80,7 @@ class Run:
         
         # Set time and use it as a distinguishing parameter for this run
         now = datetime.now()
-        time_str = now.strftime("%Y-%m-%d %H:%M")
+        time_str = now.strftime("%m_%d_%H_%M")
         self.config["time"] = time_str
         
         self._set_logger()

@@ -46,7 +46,7 @@ class PostRunSLT:
             path=self.run_path, 
             filters={
                 "display_name": self.run_name,
-                # "$or": [{"state": "crashed"}, {"state": "finished"}],
+                "state": "finished",
                 },
             order="created_at", # Default descending order so backwards in time
         )
@@ -57,18 +57,14 @@ class PostRunSLT:
         self.accuracy_history = self.history["Train Acc"]
         self.steps = self.history["_step"]
 
-        # Get full config logged for the run we are analysing off WandB
-        # My logic for picking 100 here is it's probably going to exist, but this might cause errors
-        try:
-            self.config: MainConfig = self._get_config()
-        except:
-            self.config: MainConfig = self._get_config_old(idx=3800)
+        # self.config: MainConfig = OmegaConf.create(self.run_api.config)
+        self.config = self._get_config()
         
-        # Set total number of unique samples seen (n). Be careful if this is not done it will break LLC estimator.
+        # Set total number of unique samples seen (n). If this is not done it will break LLC estimator.
         self.slt_config.rlct_config.sgld_kwargs.num_samples = self.slt_config.rlct_config.num_samples = self.config.rlct_config.sgld_kwargs.num_samples
         self.slt_config.nano_gpt_config = self.config.nano_gpt_config
         
-        # Now that you have config, log config again. Set new run to write RLCT information to
+        # Log old config and SLT config to new run for post-analysis information
         self._set_logger()
         
         self.ed_loader = create_dataloader_hf(self.config, deterministic=True) # Make sure deterministic to see same data
@@ -106,23 +102,16 @@ class PostRunSLT:
         model_state_path = Path(data_dir) / "states.torch"
         states = torch.load(model_state_path)
         self.model_state_dict = states["model"]
-    
-    
-    def _get_config_old(self, idx: int) -> MainConfig:
-        """Restore config from a checkpoint. Only call once in entire run.
-        
-        Params:
-            idx: Index in steps.
-        """
-        artifact = self.api.artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
-        data_dir = artifact.download()
-        config_path = Path(data_dir) / "config.yaml"
-        return OmegaConf.load(config_path)
 
     
     def _get_config(self) -> MainConfig:
-        """"Newer version of above function which removes need for indexing by separating config saving from model checkpointing."""
-        artifact = self.api.artifact(f"{self.run_path}/config:{self.run_name}")
+        """"
+        Manually get config from run as artifact. 
+        WandB also logs automatically for each run, but it doesn't log enums correctly.
+        """
+        artifact = artifact = self.api.artifact(f"{self.run_path}/states:dihedral_config_state")
+        # artifact = self.api.artifact(f"{self.run_path}/config:{self.run_name}")
+        # artifact = self.api.artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
         data_dir = artifact.download()
         config_path = Path(data_dir) / "config.yaml"
         return OmegaConf.load(config_path)
@@ -131,7 +120,7 @@ class PostRunSLT:
     def _load_ed_logits(self) -> None:
         """Load ED logits from WandB."""
         # artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
-        artifact = self.api.artifact(f"{self.run_path}/logits:dihedral_test")
+        artifact = self.api.artifact(f"{self.run_path}/logits:test")
         data_dir = artifact.download()
         logit_path = Path(data_dir) / "logits_artifact"
         self.ed_logits = torch.load(logit_path)

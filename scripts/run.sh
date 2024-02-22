@@ -3,10 +3,7 @@
 # This script can optionally manage the main config name via command line passing to Hydra
 SCRIPT_PATH="run.py"
 
-task="dihedral"
-# task="dihedral,permutation_reset,cyclic,symmetric"
-# task="abab,flipflop,parity"
-# task="quaternion,gridworld,alternating"
+task="alternating"
 
 # Whether to log particular things
 llc_train="False"

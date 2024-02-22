@@ -19,6 +19,7 @@ seq_len: 25
 
 wandb_project_name: devinterp-automata
 entity_name: wu-cindyx
+run_idx: 1
 
 rlct_config:
   sampling_method: SGLD_MA
