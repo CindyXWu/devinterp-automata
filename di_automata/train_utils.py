@@ -261,7 +261,8 @@ class Run:
         wandb.config.model_type = self.config.model_type
         
         # Location on remote GPU of WandB cache to delete periodically
-        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.local/share/wandb/artifacts/staging", Path.home() / "root/.cache/wandb/artifacts/obj"]
+        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
+        """We also have "root/.local/share/wandb/artifacts", but this can't be deleted as often as doing so prevents proper upload of model checkpoints. Delete in finish_run() below."""
         
         
     def finish_run(self) -> None:
@@ -275,9 +276,9 @@ class Run:
         if self.config.is_wandb_enabled:
             wandb.finish()
             
-            for dir in self.wandb_cache_dirs:
-                if dir.is_dir():
-                    shutil.rmtree(dir)
+            upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
+            if upload_cache_dir.is_dir():
+                shutil.rmtree(upload_cache_dir)
                 
             time.sleep(60)
             shutil.rmtree("wandb")
@@ -289,6 +290,14 @@ class Run:
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except:
             print("Cache file deletion skipped.")
+        
+        for cache_dir in self.wandb_cache_dirs:
+            if cache_dir.is_dir():
+                try: 
+                    shutil.rmtree(cache_dir)
+                    print(f"Removed {cache_dir}")
+                except OSError as e: 
+                    print(f"Failed to remove dir {cache_dir}.", e)
                     
                     
     def _restore_model(self, resume_training: bool = False) -> None:

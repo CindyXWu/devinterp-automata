@@ -295,9 +295,9 @@ class PostRunSLT:
         if self.config.is_wandb_enabled:
             wandb.finish()
         
-            # upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
-            # if upload_cache_dir.is_dir():
-            #     shutil.rmtree(upload_cache_dir)
+            upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
+            if upload_cache_dir.is_dir():
+                shutil.rmtree(upload_cache_dir)
                 
             time.sleep(60)
             shutil.rmtree("wandb")
