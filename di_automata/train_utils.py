@@ -102,7 +102,7 @@ class Run:
         for epoch in range(self.config.num_epochs):
             self.epoch = epoch
             train_loss = []
-            print(f"Training epoch {epoch}")
+
             self.num_iter = self.config.eval_frequency if epoch + 1 <= self.config.num_training_iter / self.config.eval_frequency  else self.config.num_training_iter % self.config.eval_frequency
             
             for data in take_n(self.train_loader, self.num_iter): # Compatible with HF dataset format where data is a dictionary
@@ -142,12 +142,8 @@ class Run:
                     )
                     iter_model_saved = True
                 
-            train_acc, train_loss, eval_acc, eval_loss = self._evaluation_step(eval=False)
+            train_acc, train_loss, eval_acc, eval_loss = self._evaluation_step(logits.shape)
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
-            
-            # Early logit saving in case run crashes
-            if train_acc > 80 and epoch % 5 == 0:
-                self._save_logits()
                 
             # Early-stopping using evaluation set (deterministic and full-dataset evaluation)
             if math.log(eval_loss) < math.log(best_loss):
@@ -198,14 +194,14 @@ class Run:
         wandb.log_artifact(rlct_artifact, aliases=[f"rlct_distill_{self.config.rlct_config.use_distill_loss}"])
     
     
-    def _evaluation_step(self) -> tuple[float, float, float, float]:
+    def _evaluation_step(self, logits_shape: tuple[int, int, int]) -> tuple[float, float, float, float]:
         """Calculate and log train and test accuracy/loss to WandB.
         
         Both train and eval use on order of >100 batches, but the only difference is train draws fresh samples each time, whereas eval keeps the same evaluation dataset.
         
-        For this reason, train uses 5 times fewer batches, since it's supposed to be stochastic.
+        For this reason, train uses 10x fewer batches, since it's supposed to be stochastic.
         """
-        eval_func = partial(evaluate, model=self.model, ema=self.ema if self.config.use_ema else None)
+        eval_func = partial(evaluate, model=self.model, logits_shape=logits_shape, ema=self.ema if self.config.use_ema else None)
         train_acc, train_loss = eval_func(data_loader=self.train_loader, num_eval_batches=self.config.num_eval_batches // 10)
         eval_acc, eval_loss = eval_func(data_loader=self.eval_loader, num_eval_batches=self.config.num_eval_batches)
         
@@ -232,13 +228,13 @@ class Run:
         with context_manager:
             model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
             state = get_state_dict(model_to_save, optimizer, scheduler, ema)
-            torch.save(
-                state, # Save optimizer, model, scheduler, EMA all in one go
-                Path(".") / "states.torch", # Working directory configured by Hydra as output directory
-            )
         
         match self.config.model_save_method:
             case "wandb":
+                torch.save(
+                    state, # Save optimizer, model, scheduler, EMA all in one go
+                    Path(".") / "states.torch", # Working directory configured by Hydra as output directory
+                )
                 model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
                 model_artifact.add_file(f"states.torch")
                 wandb.log_artifact(model_artifact, aliases=[f"idx{idx}_{self.config.run_name}_{self.config.time}"])
@@ -359,6 +355,7 @@ def evaluate(
     model: nn.Module, 
     data_loader: DataLoader,
     num_eval_batches: int,
+    logits_shape: tuple[int, int, int],
     ema: Optional[ExponentialMovingAverage] = None,
     device: torch.device = torch.device("cuda"),
 ) -> Tuple[float, float]:
@@ -379,11 +376,13 @@ def evaluate(
     with context_manager:
         for data in take_n(data_loader, num_eval_batches):
             inputs, labels = data["input_ids"].to(device), data["label_ids"].to(device)
-            outputs = model(inputs)
-        
-            total_loss += F.cross_entropy(outputs, labels.long())
+            logits = model(inputs)
+
+            if not logits.shape[1] == logits_shape[1]:
+                logits = rearrange(logits, 'b c s -> b s c')
+            total_loss += F.cross_entropy(logits, labels.long())
             # Second dimension is class dimension in PyTorch for sequence data (see AutoGPT transformer for details)
-            probs = torch.softmax(outputs, dim=1)
+            probs = torch.softmax(logits, dim=1)
             predictions = torch.argmax(probs, dim=1)
 
             correct_predictions = predictions == labels

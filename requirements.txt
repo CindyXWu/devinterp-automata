@@ -64,6 +64,7 @@ omegaconf
 pytest
 pydantic
 seaborn
+transformer_lens
 python-dotenv
 torch-ema
 
