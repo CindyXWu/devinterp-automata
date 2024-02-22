@@ -42,6 +42,7 @@ from di_automata.constructors import (
     construct_rlct_criterion,
     get_state_dict,
 )
+from di_automata.io import read_tensors_from_file, append_tensor_to_file
 Sweep = TypeVar("Sweep")
 
 # Path to root dir (with setup.py)
@@ -76,7 +77,7 @@ class Run:
         self.rlct_folder.mkdir(parents=True, exist_ok=True)
         self.rlct_criterion = construct_rlct_criterion(self.config)
         
-        self.ed_logits = []
+        self.logits_path = "logits.bin" # Binary file
         
         # Set time and use it as a distinguishing parameter for this run
         now = datetime.now()
@@ -134,6 +135,10 @@ class Run:
             train_loss, train_acc = self._evaluation_step()
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
             
+            # Early logit saving in case run crashes
+            if train_acc > 80 and epoch % 5 == 0:
+                self._save_logits()
+                
             # Early-stopping
             if math.log(train_loss) < math.log(best_loss):
                 best_loss = train_loss
@@ -161,18 +166,21 @@ class Run:
         self.model.train()
         
         # Concat all per-batch logits over batch dimension to form one super-batch
-        logits_epoch = torch.cat(logits_epoch)
-        self.ed_logits.append(logits_epoch.cpu())
+        self.logits_epoch = torch.cat(logits_epoch)
         
+        # Append to binary file
+        append_tensor_to_file(self.logits_epoch, self.logits_path)
+
         
     def _ed_calculation(self) -> None:
         """PCA and plot part of ED."""
+        ed_logits = read_tensors_from_file(self.logits_path, self.config)
+        
         pca = PCA(n_components=3)
-        concat_logit_matrix = torch.stack(self.ed_logits)
-        pca.fit(concat_logit_matrix.cpu().numpy())
+        pca.fit(torch.stack(ed_logits).cpu().numpy())
         
         projected_1, projected_2, projected_3 = [], [], []
-        for row in self.ed_logits:
+        for row in ed_logits:
             logits_epoch = rearrange(row, 'n -> 1 n').cpu().numpy()
             projected_vector = pca.transform(logits_epoch)[0]
             projected_1.append(projected_vector[0])
@@ -187,14 +195,15 @@ class Run:
             "explained_var": wandb.Image("pca_explained_var.png"),
         })
         
-        torch.save(concat_logit_matrix, "logits")
-        logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-        logit_artifact.add_file("logits", name="logits_artifact")
-        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
-        if os.path.exists("logits"): # Delete logits as these can take up to 30GB of storage
-            os.remove("logits")
-        self._del_wandb_cache()
+        self._save_logits()
 
+
+    def _save_logits(self):
+        logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
+        logit_artifact.add_file("logits.bin", name="logits_artifact")
+        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
+        self._del_wandb_cache()
+        
             
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
         """Estimate RLCT for a given epoch during training.
@@ -320,6 +329,10 @@ class Run:
             self._ed_calculation()
         if self.config.llc_train:
             self._save_rlct()
+            
+        if os.path.exists("logits.bin"): # Delete logits as these can take up to 30GB of storage
+            os.remove("logits.bin")
+            
         if self.config.is_wandb_enabled:
             wandb.finish()
             

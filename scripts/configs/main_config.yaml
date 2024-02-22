@@ -4,7 +4,7 @@ defaults:
 model_type: NANO_GPT
 parameterisation: MUP
 
-llc_train: true
+llc_train: false
 ed_train: true
 use_ema: true
 
@@ -32,8 +32,8 @@ rlct_config:
   use_distill_loss: true
 
   ed_config:
-    batches_per_checkpoint: 300
-    eval_frequency: 10
+    batches_per_checkpoint: 150
+    eval_frequency: 3
 
   sgld_kwargs:
     lr: 5e-8
