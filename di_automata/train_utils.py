@@ -87,7 +87,7 @@ class Run:
         self._save_config()
         
         # Concurrent IO, bound to class instance
-        self.executor = ThreadPoolExecutor(max_workers=30)
+        self.executor = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
 
     
     def train(self) -> None:
@@ -108,7 +108,7 @@ class Run:
             for data in take_n(self.train_loader, self.num_iter): # Compatible with HF dataset format where data is a dictionary
                 # all_idxs is a list of idxs (not useful)
                 iter_model_saved = False
-                self.idx += 1 # TODO: move this to end of loop for easier analysis indexing (always log step 0)
+    
                 inputs, labels = data["input_ids"].to(self.device), data["label_ids"].to(self.device)
                 
                 logits = self.model(inputs)
@@ -142,6 +142,8 @@ class Run:
                     )
                     iter_model_saved = True
                 
+                self.idx += 1
+                
             train_acc, train_loss, eval_acc, eval_loss = self._evaluation_step(logits.shape)
             self.progress_bar.set_description(f"Epoch {epoch} accuracy {train_acc}")
                 
@@ -157,7 +159,15 @@ class Run:
 
             if self.config.llc_train: self._rlct_training()
             
-            if not iter_model_saved: self._save_model()
+            if not iter_model_saved:
+                self.executor.submit(
+                    self._save_model,
+                    self.model,
+                    self.optimizer,
+                    self.scheduler,
+                    self.ema,
+                    self.idx,
+                )
 
             
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:

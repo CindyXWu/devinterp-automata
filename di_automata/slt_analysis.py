@@ -81,6 +81,7 @@ class PostRunSLT:
         
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_criterion = construct_rlct_criterion(self.config)
+        # Optional: currently don't use as local logits take up a lot of storage
         self.logits_path = "logits.bin" # Binary file
     
     

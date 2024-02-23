@@ -2,10 +2,14 @@ defaults:
   - task_config: adder
 
 model_type: NANO_GPT
-dataset_type: 'adder'
+dataset_type: 'dihedral'
 
 llc: false
 ed: true
+
+run_idx: 1
+wandb_project_name: devinterp-automata
+entity_name: wu-cindyx
 
 lr: 1e-4
 num_training_iter: 14000
@@ -16,10 +20,6 @@ truncate_its: null # Set to null if you want to automatically truncate using abo
 
 n_layers: 3
 seq_len: 25
-
-wandb_project_name: devinterp-automata
-entity_name: wu-cindyx
-run_idx: 1
 
 rlct_config:
   sampling_method: SGLD_MA

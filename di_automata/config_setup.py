@@ -513,6 +513,7 @@ class MainConfig(BaseModel):
     use_ema: bool = Field(default=True, description="Whether to use exponential moving average of model parameters.")
     use_scratchpad: bool = Field(default=True, description="Whether to use scratchpad training with recency bias as in Liu et al 'Transformers Learn Shortcuts to Automata' https://arxiv.org/abs/2210.10749")
     # Other
+    num_model_save_workers: Optional[int] = Field(default=1, description="Number of workers to use for saving model checkpoints.")
     ema_decay: float = Field(default=0.9, description="Decay factor for EMA.")
     parameterisation: ParameterisationType = Field(default=ParameterisationType.MUP)
     num_training_iter: int = Field(default=10000)
