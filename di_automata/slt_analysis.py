@@ -31,7 +31,7 @@ from di_automata.constructors import (
 )
 from di_automata.tasks.data_utils import take_n
 from di_automata.io import read_tensors_from_file, append_tensor_to_file
-from di_automata.devinterp.ed_utils import EssentialDynamicsPlotter
+from di_automata.devinterp.ed_utils import EssentialDynamicsPlotter, FormPotentialPlotter
 Sweep = TypeVar("Sweep")
 
 # AWS
@@ -85,19 +85,25 @@ class PostRunSLT:
         self.logits_path = "logits.bin" # Binary file
     
     
-    def run_slt(self):
+    def do_ed(self):
         """Main executable function of this class."""
         if self.slt_config.ed:
             ed_logits: list[torch.Tensor] = self._get_ed_logits_from_checkpoints()
             ed_logits: list[torch.Tensor] = self._truncate_ed_logits(ed_logits)
             ed_projected_samples = self._ed_calculation(ed_logits)
-            
+    
             # Create and call instance of essential dynamics osculating circle plotter
             ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, self.steps, self.slt_config.ed_plot_config, self.run_name)
             wandb.log({"ed_osculating": wandb.Image("ed_osculating_circles.png")})
-
-        if self.slt_config.llc:
-            self._rlct()
+    
+    
+    def plot_form_potential(self):
+        """After analysing initial osculating circle plot, choose marked cusp data points.
+        Use these to plot a form potential plot over time steps.
+        """
+        ed_logits = read_tensors_from_file(self.logits_path, self.config)
+        form_potential_plotter = FormPotentialPlotter(ed_logits, self.steps, self.slt_config, self.run_name)
+        form_potential_plotter.plot()
     
     
     def _restore_states(self, idx: int) -> dict:
@@ -111,7 +117,7 @@ class PostRunSLT:
         """
         match self.config.model_save_method:
             case "wandb":
-                artifact = self.run.use_artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
+                artifact = self.run.use_artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}_{self.config.time}")
                 data_dir = artifact.download()
                 model_state_path = Path(data_dir) / "states.torch"
                 states = torch.load(model_state_path)
@@ -126,9 +132,8 @@ class PostRunSLT:
         Manually get config from run as artifact. 
         WandB also logs automatically for each run, but it doesn't log enums correctly.
         """
-        artifact = artifact = self.api.artifact(f"{self.run_path}/states:dihedral_config_state")
-        # artifact = self.api.artifact(f"{self.run_path}/config:{self.run_name}")
-        # artifact = self.api.artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}")
+        # artifact = artifact = self.api.artifact(f"{self.run_path}/states:dihedral_config_state") # Used as a test with manual artifact labelling
+        artifact = self.api.artifact(f"{self.run_path}/config:{self.run_name}_{self.config.time}")
         data_dir = artifact.download()
         config_path = Path(data_dir) / "config.yaml"
         return OmegaConf.load(config_path)
@@ -165,8 +170,8 @@ class PostRunSLT:
             # Concat all per-batch logits over batch dimension to form one super-batch
             self.logits_epoch = torch.cat(logits_epoch)
             
-            # # Append to binary file
-            # append_tensor_to_file(self.logits_epoch, self.logits_path)
+            # Append to binary file
+            append_tensor_to_file(self.logits_epoch, self.logits_path)
             
             ed_logits.append(self.logits_epoch)
         
@@ -235,22 +240,26 @@ class PostRunSLT:
         pca_samples_file_path = f"pca_projected_samples_{self.config.run_name}.pkl"
         with open(pca_samples_file_path, 'wb') as f:
             pickle.dump(pca_projected_samples, f)
+            
+        pca_file_path = f"pca_{self.config.run_name}.pkl"
+        with open(pca_file_path, 'wb') as f:
+            pickle.dump(pca, f)
 
         ## Try to avoid saving logits to WandB because they can be REAL CHONK (50-100GB PER RUN)
-        # self._save_logits() 
+        # self._save_logits_wandb() 
         
         return pca_projected_samples
     
     
-    # def _save_logits(self):
-    #     """Deprecated."""
+    # def _save_logits_wandb(self):
+    #     """Deprecated - save logits to WandB."""
     #     logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
     #     logit_artifact.add_file("logits.bin", name="logits_artifact")
     #     wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
     #     self._del_wandb_cache()
         
     
-    def _rlct(self):
+    def calculate_rlct(self):
         """Estimate RLCTs from a set of checkpoints after training, plot and dump graph on WandB."""
         train_loader = create_dataloader_hf(self.config, deterministic=False)
 

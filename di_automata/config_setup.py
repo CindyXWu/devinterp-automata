@@ -610,6 +610,7 @@ class PostRunSLTConfig(BaseModel):
     ## Flags
     llc: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
     ed: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
+    form: bool = Field(default=False, description="Whether to plot form potential over time. Requires marked_cusp_data to be not None in EDPlotConfig.")
     
     ## WandB
     wandb_project_name: str = Field(default="devinterp-automata")

@@ -11,12 +11,26 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager
 import seaborn as sns
 
-from di_automata.config_setup import EDPlotConfig
+from di_automata.config_setup import *
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv();
 
+# Plotting globals
+sns.set_style("ticks")
+# plt.rcParams["font.family"] = "Times New Roman"
+plt.rc('xtick', labelsize=10)
+plt.rc('ytick', labelsize=10)
+plt.rc('axes', labelsize=10)
+plt.rc('legend', fontsize=10)
+plt.rc('axes', titlesize=12)
+plt.rcParams['figure.dpi'] = 300
 
+golden_ratio = (5**0.5 - 1) / 2
+WIDTH = 3.25
+HEIGHT = WIDTH * golden_ratio
+        
+        
 def get_nearest_step(steps, step):
     """Used for osculating circle plots."""
     idx = np.argmin(np.abs(np.array(steps) - step))
@@ -333,23 +347,8 @@ class EssentialDynamicsPlotter:
 
     def _set_matplotlib(self) -> Tuple[matplotlib.figure.Figure, Union[matplotlib.axes.Axes, List[matplotlib.axes.Axes]]]:
         """Set matplotlib defaults."""
-        fonts = set(f.name for f in matplotlib.font_manager.fontManager.ttflist)
-        sns.set_style("ticks")
-        # plt.rcParams["font.family"] = "Times New Roman"
-        plt.rc('xtick', labelsize=10)
-        plt.rc('ytick', labelsize=10)
-        plt.rc('axes', labelsize=10)
-        plt.rc('legend', fontsize=10)
-        plt.rc('axes', titlesize=12)
-        plt.rcParams['figure.dpi'] = 300
-        
-        golden_ratio = (5**0.5 - 1) / 2
-        self.WIDTH = 3.25
-        self.HEIGHT = self.WIDTH * golden_ratio
-        
         self.palette = 'tab10'
         self.colors = self.config.colors or sns.color_palette(self.palette)
-        
         self.fonts = set(f.name for f in matplotlib.font_manager.fontManager.ttflist)
         
         num_pca_combos = (self.config.num_pca_components * (self.config.num_pca_components - 1)) // 2 # n choose 2
@@ -359,3 +358,131 @@ class EssentialDynamicsPlotter:
             axes = [axes]
         
         return fig, axes
+    
+    
+class FormPotentialPlotter:
+    """Take identified 
+    """
+    def __init__(
+        self,
+        samples: np.ndarray,
+        steps: np.ndarray,
+        slt_config: PostRunSLTConfig,
+        run_name: str,
+    ):
+        """"
+        This function requires marked cusp data to be present. It should be called after the initial osculating circle plot has been examined.
+        
+        Args:
+            original_samples: unprojected original logit samples.
+            steps: steps of samples as fed in (not truncated, but should be based on config influence_start and influence_end points).
+        """
+        self.samples = samples
+        self.steps = steps
+        self.slt_config = slt_config
+        self.config = slt_config.ed_plot_config
+        self.run_name = run_name
+        self.marked_cusp_data = self.config.marked_cusp_data
+
+        self.alpha = 1
+        self.cusp_functions = []
+        
+        # Change only if you want more than 3 PCA components
+        self.pc_pairs = [[0,1], [0,2], [1,2]]
+        
+        self._set_matplotlib()
+        
+        
+    def _set_matplotlib(self) -> None:
+        plt.figure(figsize=(5, 3))
+        plt.xlabel(r'Step $t$')
+        plt.ylabel(r'$H_\alpha(w_t)$')
+    
+    
+    def plot(self):
+        cusp_functions = []
+        alpha = 1 # Index of form
+        
+        with open (f"pca_{self.slt_config.run_name}", "rb") as file:
+            pca = pickle.load(file)
+            
+        for cusp in self.marked_cusp_data:
+            cusp_index = cusp["step"]
+            influence_start = cusp["influence_start"]
+            influence_end = cusp["influence_end"]
+            sample_indices = np.arange(int(influence_start * 0.6), int(influence_end * 1.4))
+            # sample_indices = np.arange(1, len(self.samples))
+        
+            print(f'Processing cusp at {cusp_index}')
+            
+            center_list = []
+            
+            for i, j in self.pc_pairs:
+                file_path_smoothings = f'smoothed_samples_i{i}_j{j}.pkl'
+                file_path_osculating = f'osculating_data_i{i}_j{j}.pkl'
+                assert os.path.exists(file_path_smoothings), "No smoothing stored on disk"        
+                with open(file_path_smoothings, 'rb') as file:
+                    smoothed_samples = pickle.load(file)
+
+                assert os.path.exists(file_path_osculating), "No osculating data stored to disk"
+                with open(file_path_osculating, 'rb') as file:
+                    osculating_data = pickle.load(file)
+
+                center, radius = osculating_data[cusp_index]
+                center_list.append(center)
+
+            # center_list[0] = [pc1, pc2]
+            coeff_pc1 = center_list[0][0]
+            coeff_pc2 = center_list[0][1]
+
+            # center_list[1] = [pc1, pc3]
+            coeff_pc3 = center_list[1][1]
+            
+            # pca_vectors[t,:] is the (t+1)st principal component
+            pca_vectors = pca.components_
+            
+            if self.config.num_pca_components == 3:
+                f_cusp = pca_vectors[0,:] * coeff_pc1 + pca_vectors[1,:] * coeff_pc2 + pca_vectors[2,:] * coeff_pc3
+                f_cusp_top = np.array([coeff_pc1, coeff_pc2, coeff_pc3])
+
+            cusp_functions.append(f_cusp)       
+
+            # Project back for a sanity check
+            I = 0
+            for first_pc, second_pc in self.pc_pairs:
+                j = first_pc - 1
+                i = second_pc - 1
+                
+                components_to_use = [i,j]
+                selected_components = pca.components_[components_to_use]
+                f_projected = f_cusp.dot(selected_components.T)
+                print(f"Norm distance for pair [{first_pc},{second_pc}] is {np.linalg.norm(f_projected - center_list[I])}")
+                I += 1
+                    
+            distances = np.linalg.norm(self.samples[sample_indices,:self.config.num_pca_components] - f_cusp_top,axis=1)
+
+            print(f"Distances length {len(distances)}")
+            print(f"Principal components of sample at {cusp_index}: {self.samples[cusp_index,:4]}")
+            print(f"Principal components of inferred cusp: {f_cusp_top}")
+
+            distances = distances ** 2
+            smoothed_distances = scipy.ndimage.gaussian_filter1d(distances, 1)
+            distances = distances - np.min(smoothed_distances)
+            smoothed_distances = smoothed_distances - np.min(smoothed_distances)
+            
+            # Smoothed distances are actually distance to 
+            # plt.scatter(sample_indices * 100, distances, s=1, alpha=0.01)
+            plt.plot(sample_indices * self.slt_config.rlct_config.ed_config.eval_frequency, smoothed_distances, lw=0.8, label=r'$\alpha = $' + str(alpha))
+            
+            alpha += 1
+        
+        self._finish_plot()
+    
+    
+    def _finish_plot(self):
+        plt.legend(loc='lower left')
+        for marked_cusp in self.config.marked_cusp_data:
+            plt.axvline(x=marked_cusp["influence_start"] * self.slt_config.rlct_config.ed_config.eval_frequency, color='black', linestyle=':', lw=1, alpha=0.1)
+            plt.axvline(x=marked_cusp["influence_end"] * self.slt_config.rlct_config.ed_config.eval_frequency, color='black', linestyle=':', lw=1, alpha=0.1)
+        plt.xscale('log')
+        plt.savefig("form_potential.png", dpi=300)

@@ -6,6 +6,7 @@ dataset_type: 'dihedral'
 
 llc: false
 ed: true
+form: false
 
 run_idx: 1
 wandb_project_name: devinterp-automata
@@ -61,8 +62,8 @@ ed_plot_config:
   figsize: [20, 6]
   marked_cusp_data: null
   use_cache: false
-  num_sharp_points: 20
-  num_vertices: 35
+  num_sharp_points: 10
+  num_vertices: 30
   osculate_start: 1
   osculate_end_offset: 0
   osculate_skip: 10

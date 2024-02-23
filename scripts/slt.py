@@ -19,10 +19,18 @@ def main(config: PostRunSLTConfig) -> None:
     # Convert OmegaConf object to MainConfig Pydantic model for dynamic type validation - NECESSARY DO NOT SKIP
     pydantic_config = PostRunSLTConfig(**config)
     # Convert back to OmegaConf object for compatibility with existing code
-    omegaconf_config = OmegaConf.create(pydantic_config.dict())
-
+    omegaconf_config = OmegaConf.create(pydantic_config.model_dump())
+    
     post_run = PostRunSLT(omegaconf_config)
-    post_run.run_slt()
+    if omegaconf_config.ed:
+        post_run.do_ed()
+        
+    if omegaconf_config.llc:
+        post_run.calculate_rlct()
+    
+    if omegaconf_config.form:
+        post_run.plot_form_potential()
+    
     post_run.finish_run()
     
     

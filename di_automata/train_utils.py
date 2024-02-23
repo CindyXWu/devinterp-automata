@@ -132,14 +132,17 @@ class Run:
                 
                 # For ED: save model but do not log other metrics at this frequency
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
-                    self.executor.submit(
-                        self._save_model,
-                        self.model,
-                        self.optimizer,
-                        self.scheduler,
-                        self.ema,
-                        self.idx,
-                    )
+                    if self.config.model_save_method == "aws":
+                        self.executor.submit(
+                            self._save_model,
+                            self.model,
+                            self.optimizer,
+                            self.scheduler,
+                            self.ema,
+                            self.idx,
+                        )
+                    else:
+                        self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
                     iter_model_saved = True
                 
                 self.idx += 1
@@ -159,16 +162,20 @@ class Run:
 
             if self.config.llc_train: self._rlct_training()
             
-            if not iter_model_saved:
-                self.executor.submit(
-                    self._save_model,
-                    self.model,
-                    self.optimizer,
-                    self.scheduler,
-                    self.ema,
-                    self.idx,
-                )
-
+            # For ED: save model but do not log other metrics at this frequency
+            if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0 and not iter_model_saved:
+                if self.config.model_save_method == "aws":
+                    self.executor.submit(
+                        self._save_model,
+                        self.model,
+                        self.optimizer,
+                        self.scheduler,
+                        self.ema,
+                        self.idx,
+                    )
+                else:
+                    self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
+         
             
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
         """Estimate RLCT for a given epoch during training.
@@ -228,7 +235,7 @@ class Run:
         with open(".hydra/config.yaml", "w") as file:
             file.write(OmegaConf.to_yaml(self.config)) # Necessary: Hydra automatic config file does not include Pydantic run-time attributes and wrong thing will be logged and cause a nasty bug
         model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
-        wandb.log_artifact(model_artifact, aliases=[f"{self.config.run_name}"])
+        wandb.log_artifact(model_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
             
             
     def _save_model(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: SchedulerType, ema: ExponentialMovingAverage, idx: int) -> None:
@@ -253,14 +260,6 @@ class Run:
                 with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{self.idx}.pth', mode='wb') as file:
                     torch.save(state, file)
                 print("Saved model to AWS")
-            # case "local":
-            #     file_path =  self.model_save_dir / f"{self.config.run_name}"
-            #     data = {"Train Acc": self.train_acc_list, "Train Loss": self.train_loss_list}
-            #     torch.save(dict(state, **data), f"{file_path}.torch")
-        
-        # Only delete cache every 20 steps to prevent race condition with WandB's upload thread
-        if self.idx % 20 == 0 and self.config.model_save_method == "wandb":
-            self._del_wandb_cache()
             
             
     def _clean_sweep(self, sweep: "Sweep") -> List["Sweep"]:
@@ -289,9 +288,8 @@ class Run:
         wandb.config.dataset_type = self.config.task_config.dataset_type
         wandb.config.model_type = self.config.model_type
         
-        # Location on remote GPU of WandB cache to delete periodically
-        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.cache/wandb/artifacts/obj"]
-        """We also have "root/.local/share/wandb/artifacts", but this can't be deleted as often as doing so prevents proper upload of model checkpoints. Delete in finish_run() below."""
+        # Location on remote GPU of WandB cache to delete at end of run
+        self.wandb_cache_dirs = [Path.home() / ".cache/wandb/artifacts/obj", Path.home() / "root/.local/share/wandb/artifacts/staging"]
         
         
     def finish_run(self) -> None:
@@ -299,21 +297,36 @@ class Run:
         
         We define an extra cache dir to be removed at end of run here.
         """
+         # Shut down concurrent IO executor
+        if self.config.model_save_method == "aws":
+            self.executor.shutdown(wait=True)
+        
         if self.config.llc_train:
             self._save_rlct()
             
         if self.config.is_wandb_enabled:
             wandb.finish()
             
-            upload_cache_dir = Path.home() / "root/.local/share/wandb/artifacts/staging" 
-            if upload_cache_dir.is_dir() and self.config.model_save_method == "wandb":
-                shutil.rmtree(upload_cache_dir)
-                
+            # Sleep a bit before deleting anything
             time.sleep(60)
+            
+            for cache_dir in self.wandb_cache_dirs:
+                if cache_dir.is_dir():
+                    try: 
+                        shutil.rmtree(cache_dir)
+                        print(f"Removed {cache_dir}")
+                    except OSError as e: 
+                        print(f"Failed to remove dir {cache_dir}.", e)
+                
             shutil.rmtree("wandb")
         
-        # Shut down concurrent IO executor
-        self.executor.shutdown(wait=True)
+    
+    def _del_wandb_cache(self):
+        command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
+        try:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except:
+            print("Cache file deletion skipped.")
         
     
     def _del_wandb_cache(self):
@@ -334,15 +347,11 @@ class Run:
                     
     def _restore_model(self, resume_training: bool = False) -> None:
         """Restore from a checkpoint on WandB.
-        
-        TODO: Currently not in use and needs updating for EMA.
+        TODO: Currently not in use.
         """
-        artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:epoch{self.epoch}_{self.config.run_name}")
+        artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:idx{self.idx}_{self.config.run_name}_{self.config.time}")
         data_dir = artifact.download()
-        config_path = Path(data_dir) / "config.yaml"
         model_state_path = Path(data_dir) / "states.torch"
-        config = OmegaConf.load(config_path)
-        self.config = typing.cast(MainConfig, config)
         states = torch.load(model_state_path)
         
         self.model_state_dict, optimizer_state_dict, scheduler_state_dict, ema_state_dict = states["model"], states["optimizer"], states["scheduler"], states["ema"]
@@ -370,9 +379,12 @@ def evaluate(
     device: torch.device = torch.device("cuda"),
 ) -> Tuple[float, float]:
     """"
+    Evaluate, wrapping in EMA context if EMA is used.
+    
     Args:
         num_eval_batches: If we aren't evaluating on the whole dataloader, then do on this many batches.
         ema: EMA object whose average_parameters() context is used for model evaluation. If no EMA, then this object should be None.
+        
     Returns:
         accuracy: Average percentage accuracy on batch.
         loss: Average loss on batch.
