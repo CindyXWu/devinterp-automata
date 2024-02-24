@@ -135,7 +135,7 @@ class PostRunSLT:
         return states["model"]
 
 
-        def _restore_states_from_queue(self) -> dict:
+    def _restore_states_from_queue(self) -> dict:
         """Restore model state from a checkpoint. Called once for every epoch.
         
         Params:
@@ -183,12 +183,12 @@ class PostRunSLT:
         2. For each checkpoint, do forward pass to obtain logits and save.
         """
         if self.config.use_logits:
-            ed_logits = _load_ed_logits()
+            ed_logits = self._load_ed_logits()
 
         else:
             ed_logits = []
             
-            for checkpoint_idx in range(len(queue):
+            for checkpoint_idx in range(1, self.config.num_training_iter // self.config.rlct_config.ed_config.eval_frequency):
                 idx = checkpoint_idx * self.config.rlct_config.ed_config.eval_frequency
                 state_dict = self._restore_states_from_queue(idx)
                 self.model.load_state_dict(state_dict)

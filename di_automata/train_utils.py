@@ -11,6 +11,7 @@ import contextlib
 import subprocess
 from omegaconf import OmegaConf
 from functools import partial
+from sklearn.decomposition import PCA
 from einops import rearrange
 import s3fs
 import pandas as pd
@@ -18,6 +19,8 @@ import math
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+import threading
+from queue import Queue
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -28,6 +31,8 @@ from torch.utils.data import DataLoader
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
     extract_and_save_rlct_data,
+    plot_pca_plotly,
+    plot_explained_var,
 )
 from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import *
@@ -82,6 +87,7 @@ class Run:
         self.rlct_criterion = construct_rlct_criterion(self.config)
 
         self.logits_path = "logits.bin" # Binary file
+        self.ed_logits = []
         
         # Set time and use it as a distinguishing parameter for this run
         self.config["time"] = datetime.now().strftime("%m_%d_%H_%M")
@@ -94,8 +100,8 @@ class Run:
         # Concurrent IO, bound to class instance
         self.executor = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
         self.logit_saver = ThreadPoolExecutor(max_workers=30)
-
-    
+            
+        
     def train(self) -> None:
         criterion = nn.CrossEntropyLoss()
         self.model.train()
@@ -187,38 +193,48 @@ class Run:
                     self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
 
     
-    def _ed_data_training(self) -> None:
-        """Collect essential dynamics logit data each epoch."""
+    def _ed_data_training(self, model: torch.nn.Module, ema: ExponentialMovingAverage) -> None:
+        """Collect essential dynamics logit data each epoch.
+        Make sure anything mutable during training is passed, since this function will be called in multithreading.
+        """
         logits_epoch = []
 
-        context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
+        context_manager = ema.average_parameters() if self.config.use_ema else no_op_context()
         with context_manager:
             with torch.no_grad():
                 for data in take_n(self.ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
                     inputs = data["input_ids"].to(self.device)
-                    logits = self.model(inputs)
+                    logits = model(inputs)
                     # Flatten over batch, class and sequence dimension
                     logits_epoch.append(rearrange(logits, 'b c s -> (b c s)'))
         self.model.train()
         
         # Concat all per-batch logits over batch dimension to form one super-batch
         logits_epoch = torch.cat(logits_epoch)
-        
+        self.ed_logits.append(logits_epoch)
         # Append to binary file
         append_tensor_to_file(logits_epoch, self.logits_path)
 
 
     def _save_logits(self):
-        """Save binary logit file to WandB."""
+        """Save binary logit file to WandB or ed_logits list."""
         logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-        logit_artifact.add_file("logits.bin", name="logits_artifact")
+        if os.path.exists("logits.bin"):
+            logit_artifact.add_file("logits.bin", name="logits_artifact")
+        elif self.ed_logits:
+            torch.save(self.ed_logits, "logits")
+            logit_artifact.add_file("logits")
         wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
+        
+        if os.path.exists("logits"):
+            os.remove("logits")
+            
         self._del_wandb_cache()
 
 
     def _ed_calculation(self) -> None:
         """PCA and plot part of ED."""
-        ed_logits = read_tensors_from_file(self.logits_path, self.config)
+        ed_logits = read_tensors_from_file(self.logits_path, self.config) if not self.ed_logits else self.ed_logits
         
         pca = PCA(n_components=3)
         pca.fit(torch.stack(ed_logits).cpu().numpy())
