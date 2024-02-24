@@ -9,11 +9,11 @@ ed_train: true
 use_ema: true
 use_scratchpad: false
 
-model_save_method: aws
+model_save_method: wandb
 aws_bucket: s3://automata-devinterp-01/my_checkpoints/
 
-num_training_iter: 14000
-eval_frequency: 50 # If not specified then use length of dataset (dataloader length)
+num_training_iter: 15000
+eval_frequency: 100 # If not specified then use length of dataset (dataloader length)
 ema_decay: 0.9
 num_eval_batches: 100
 early_stop_patience: 20

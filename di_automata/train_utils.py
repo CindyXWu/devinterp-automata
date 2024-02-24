@@ -58,6 +58,8 @@ s3 = s3fs.S3FileSystem()
 
 class Run:
     def __init__(self, config: MainConfig):
+        self.SAVE_LOGITS_CP = False
+        
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         self.config = config
@@ -79,14 +81,13 @@ class Run:
             self.ema.to(self.device)
         else:
             self.ema = None
-        self.context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
 
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
         self.rlct_folder.mkdir(parents=True, exist_ok=True)
         self.rlct_criterion = construct_rlct_criterion(self.config)
 
-        self.logits_path = "logits.bin" # Binary file
+        # self.logits_path = "logits.bin" # Binary file
         self.ed_logits = []
         
         # Set time and use it as a distinguishing parameter for this run
@@ -100,6 +101,17 @@ class Run:
         # Concurrent IO, bound to class instance
         self.executor = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
         self.logit_saver = ThreadPoolExecutor(max_workers=30)
+                          
+                                         
+    def writer_thread_function(self, path):
+        idx = 0
+        while idx < 50: # Stop if 50 consecutive calls and queue still empty
+            item = self.write_queue.get()
+            if item is None:
+                idx += 1 
+            tensor = item
+            append_tensor_to_file(tensor, path)
+            self.write_queue.task_done()
             
         
     def train(self) -> None:
@@ -144,7 +156,7 @@ class Run:
 
                 # ED logit evaluation
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
-                    self._ed_data_training()
+                    self._ed_data_training(self.model, self.ema)
                     
                 # Save models for ED at slightly less frequent rate
                 if self.idx % (self.config.rlct_config.ed_config.eval_frequency * 5) == 0:
@@ -197,7 +209,7 @@ class Run:
         """Collect essential dynamics logit data each epoch.
         Make sure anything mutable during training is passed, since this function will be called in multithreading.
         """
-        logits_epoch = []
+        logits_cp = []
 
         context_manager = ema.average_parameters() if self.config.use_ema else no_op_context()
         with context_manager:
@@ -206,29 +218,38 @@ class Run:
                     inputs = data["input_ids"].to(self.device)
                     logits = model(inputs)
                     # Flatten over batch, class and sequence dimension
-                    logits_epoch.append(rearrange(logits, 'b c s -> (b c s)'))
+                    logits_cp.append(rearrange(logits, 'b c s -> (b c s)'))
         self.model.train()
         
         # Concat all per-batch logits over batch dimension to form one super-batch
-        logits_epoch = torch.cat(logits_epoch)
-        self.ed_logits.append(logits_epoch)
-        # Append to binary file
-        append_tensor_to_file(logits_epoch, self.logits_path)
+        logits_cp = torch.cat(logits_cp)
+        self.ed_logits.append(logits_cp)
+        
+        # Save logits from one epoch
+        if self.SAVE_LOGITS_CP:
+            self.logit_saver.submit(self._save_logits_cp, logits_cp, self.idx)
+    
+    
+    def _save_logits_cp(self, logits: torch.Tensor, idx: int):
+        """Save logits from one checkpoint to WandB. Should be called asynchronously.
+        TODO: check for IO bandwidth rate limit.
+        """
+        torch.save(logits, f"logits_{idx}")
+        logit_cp_artifact = wandb.Artifact(f"logits_cp_{idx}", type="logits_cp", description="Logits from one evaluation only.")
+        wandb.log_artifact(logit_cp_artifact, aliases=[f"logits_cp_{idx}_{self.config.run_name}_{self.config.time}"])
+        os.remove(f"logits_{idx}")
 
 
     def _save_logits(self):
-        """Save binary logit file to WandB or ed_logits list."""
+        """Save complete ed_logits list to WandB as one file, if it exists."""
         logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-        if os.path.exists("logits.bin"):
-            logit_artifact.add_file("logits.bin", name="logits_artifact")
-        elif self.ed_logits:
+        if self.ed_logits:
             torch.save(self.ed_logits, "logits")
             logit_artifact.add_file("logits")
         wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
         
         if os.path.exists("logits"):
             os.remove("logits")
-            
         self._del_wandb_cache()
 
 
@@ -321,7 +342,8 @@ class Run:
             
     def _save_model(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: SchedulerType, ema: ExponentialMovingAverage, idx: int) -> None:
         """Checkpoint model to AWS, WandB or local. Latter two not recommended due to frequency of ED checkpoints."""
-        with self.context_manager:
+        context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
+        with context_manager:
             model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
             state = get_state_dict(model_to_save, optimizer, scheduler, ema)
         
@@ -372,9 +394,8 @@ class Run:
         
         
     def finish_run(self) -> None:
-        """Clean up last RLCT calculation, save data, finish WandB run and delete large temporary folders.
-        
-        We define an extra cache dir to be removed at end of run here.
+        """Clean up last RLCT calculation, 
+        Save logits, finish WandB run and delete large temporary folders.
         """
          # Shut down concurrent IO executor
         if self.config.model_save_method == "aws":
