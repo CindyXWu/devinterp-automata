@@ -45,7 +45,7 @@ class PostRunSLT:
         self.slt_config: PostRunSLTConfig = slt_config
 
         # Run path and name for easy referral later
-        self.run_path = f"{slt_config.entity_name}/{slt_config.wandb_project_name}-alpha"
+        self.run_path = f"{slt_config.entity_name}/{slt_config.wandb_project_name}"
         self.run_name = slt_config.run_name
         
         # Get run information
@@ -58,12 +58,20 @@ class PostRunSLT:
                 },
             order="created_at", # Default descending order so backwards in time
         )
+        assert run_list, f"Specified run {self.run_name} does not exist"
         self.run_api = run_list[slt_config.run_idx]
+        
         try: self.history = self.run_api.history()
         except: self.history = self.run_api.history
         self.loss_history = self.history["Train Loss"]
         self.accuracy_history = self.history["Train Acc"]
         self.steps = self.history["_step"]
+
+        # Get artifacts from old run
+        artifacts = run_api.logged_artifacts()
+        self.artifact_queue = Queue()
+        for artifact in run_api.logged_artifacts():
+            self.artifact_queue.put(artifact)
 
         # self.config: MainConfig = OmegaConf.create(self.run_api.config)
         self.config = self._get_config()
@@ -126,6 +134,27 @@ class PostRunSLT:
                     states = torch.load(f)
         return states["model"]
 
+
+        def _restore_states_from_queue(self) -> dict:
+        """Restore model state from a checkpoint. Called once for every epoch.
+        
+        Params:
+            idx: Index in steps.
+            
+        Returns:
+            model state dictionary.
+        """
+        match self.config.model_save_method:
+            case "wandb":
+                artifact = self.artifact_queue.get()
+                data_dir = artifact.download()
+                model_state_path = Path(data_dir) / "states.torch"
+                states = torch.load(model_state_path)
+            case "aws":
+                with s3.open(f"{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}") as f:
+                    states = torch.load(f)
+        return states["model"]
+
     
     def _get_config(self) -> MainConfig:
         """"
@@ -133,48 +162,51 @@ class PostRunSLT:
         WandB also logs automatically for each run, but it doesn't log enums correctly.
         """
         # artifact = artifact = self.api.artifact(f"{self.run_path}/states:dihedral_config_state") # Used as a test with manual artifact labelling
-        artifact = self.api.artifact(f"{self.run_path}/config:{self.run_name}_{self.config.time}")
+        artifact = self.api.artifact(f"{self.run_path}/config:{self.run_name}") # TODO: change to add time of run as well, but time needs to be gotten natively from WandB (chicken and egg)
         data_dir = artifact.download()
         config_path = Path(data_dir) / "config.yaml"
         return OmegaConf.load(config_path)
     
     
-    # def _load_ed_logits(self) -> None:
-    #     """Load ED logits from WandB."""
-    #     # artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
-    #     artifact = self.api.artifact(f"{self.run_path}/logits:test")
-    #     data_dir = artifact.download()
-    #     logit_path = Path(data_dir) / "logits_artifact"
-    #     self.ed_logits = torch.load(logit_path)
+    def _load_ed_logits(self) -> None:
+        """Load ED logits from WandB."""
+        # artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
+        artifact = self.api.artifact(f"{self.run_path}/logits:test")
+        data_dir = artifact.download()
+        logit_path = Path(data_dir) / "logits_artifact"
+        self.ed_logits = torch.load(logit_path)
     
     
     def _get_ed_logits_from_checkpoints(self) -> list[torch.Tensor]:
-        """For each checkpoint, do forward pass to obtain logits and save.
-        Note checkpoint weights were saved with EMA if config.use_ema is True.
+        """Two options:
+        1. Load logits directly from WandB (recommended).
+        2. For each checkpoint, do forward pass to obtain logits and save.
         """
-        ed_logits = []
-        
-        for checkpoint_idx in range(1, self.config.num_training_iter // self.config.rlct_config.ed_config.eval_frequency):
-            idx = checkpoint_idx * self.config.rlct_config.ed_config.eval_frequency
-            state_dict = self._restore_states(idx)
-            self.model.load_state_dict(state_dict)
+        if self.config.use_logits:
+            ed_logits = _load_ed_logits()
+
+        else:
+            ed_logits = []
             
-            logits_epoch = []
-            with torch.no_grad():
-                for data in take_n(self.ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
-                    inputs = data["input_ids"].to(self.device)
-                    logits = self.model(inputs)
-                    # Flatten over batch, class and sequence dimension
-                    logits_epoch.append(rearrange(logits, 'b c s -> (b c s)'))
+            for checkpoint_idx in range(len(queue):
+                idx = checkpoint_idx * self.config.rlct_config.ed_config.eval_frequency
+                state_dict = self._restore_states_from_queue(idx)
+                self.model.load_state_dict(state_dict)
+                
+                logits_epoch = []
+                with torch.no_grad():
+                    for data in take_n(self.ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
+                        inputs = data["input_ids"].to(self.device)
+                        logits = self.model(inputs)
+                        # Flatten over batch, class and sequence dimension
+                        logits_epoch.append(rearrange(logits, 'b c s -> (b c s)'))
+                
+                # Concat all per-batch logits over batch dimension to form one super-batch
+                self.logits_epoch = torch.cat(logits_epoch)
+                # Append to binary file
+                append_tensor_to_file(self.logits_epoch, self.logits_path)
+                ed_logits.append(self.logits_epoch)
             
-            # Concat all per-batch logits over batch dimension to form one super-batch
-            self.logits_epoch = torch.cat(logits_epoch)
-            
-            # Append to binary file
-            append_tensor_to_file(self.logits_epoch, self.logits_path)
-            
-            ed_logits.append(self.logits_epoch)
-        
         return ed_logits
         
     

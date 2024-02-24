@@ -611,6 +611,7 @@ class PostRunSLTConfig(BaseModel):
     llc: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
     ed: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
     form: bool = Field(default=False, description="Whether to plot form potential over time. Requires marked_cusp_data to be not None in EDPlotConfig.")
+    use_logits: bool = Field(default=True, description="Whether to load logits directly for ED calculations.")
     
     ## WandB
     wandb_project_name: str = Field(default="devinterp-automata")
@@ -625,8 +626,8 @@ class PostRunSLTConfig(BaseModel):
         config_class = config_class_map[task_config["dataset_type"]]
         
         ## For new run names
-        # v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"
-        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}"
+        v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"
+        # v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}"
 
         # Adjust RLCT parameters
         rlct_config = v["rlct_config"]

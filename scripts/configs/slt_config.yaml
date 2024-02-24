@@ -1,14 +1,15 @@
 defaults:
   - task_config: adder
 
-model_type: NANO_GPT
+model_type: TF_LENS
 dataset_type: 'dihedral'
 
 llc: false
 ed: true
 form: false
+use_logits: true
 
-run_idx: 1
+run_idx: 0
 wandb_project_name: devinterp-automata
 entity_name: wu-cindyx
 

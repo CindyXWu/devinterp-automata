@@ -41,6 +41,7 @@ from di_automata.constructors import (
     get_state_dict,
     SchedulerType,
 )
+from di_automata.io import read_tensors_from_file, append_tensor_to_file
 Sweep = TypeVar("Sweep")
 
 # Path to root dir (with setup.py)
@@ -57,6 +58,7 @@ class Run:
         self.config = config
         
         self.train_loader = create_dataloader_hf(self.config, deterministic=False)
+        self.ed_loader = create_dataloader_hf(self.config, deterministic=True) # Make sure deterministic to see same data
         self.eval_loader = create_dataloader_hf(self.config, deterministic=True)
         
         self.model, param_inf_properties = construct_model(config)
@@ -72,11 +74,14 @@ class Run:
             self.ema.to(self.device)
         else:
             self.ema = None
+        self.context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
 
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
         self.rlct_folder.mkdir(parents=True, exist_ok=True)
         self.rlct_criterion = construct_rlct_criterion(self.config)
+
+        self.logits_path = "logits.bin" # Binary file
         
         # Set time and use it as a distinguishing parameter for this run
         self.config["time"] = datetime.now().strftime("%m_%d_%H_%M")
@@ -88,6 +93,7 @@ class Run:
         
         # Concurrent IO, bound to class instance
         self.executor = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
+        self.logit_saver = ThreadPoolExecutor(max_workers=30)
 
     
     def train(self) -> None:
@@ -129,9 +135,13 @@ class Run:
                     
                 train_loss.append(detached_loss)
                 self.progress_bar.update()
-                
-                # For ED: save model but do not log other metrics at this frequency
+
+                # ED logit evaluation
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
+                    self._ed_data_training()
+                    
+                # Save models for ED at slightly less frequent rate
+                if self.idx % (self.config.rlct_config.ed_config.eval_frequency * 5) == 0:
                     if self.config.model_save_method == "aws":
                         self.executor.submit(
                             self._save_model,
@@ -175,8 +185,63 @@ class Run:
                     )
                 else:
                     self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
-         
-            
+
+    
+    def _ed_data_training(self) -> None:
+        """Collect essential dynamics logit data each epoch."""
+        logits_epoch = []
+
+        context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
+        with context_manager:
+            with torch.no_grad():
+                for data in take_n(self.ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
+                    inputs = data["input_ids"].to(self.device)
+                    logits = self.model(inputs)
+                    # Flatten over batch, class and sequence dimension
+                    logits_epoch.append(rearrange(logits, 'b c s -> (b c s)'))
+        self.model.train()
+        
+        # Concat all per-batch logits over batch dimension to form one super-batch
+        logits_epoch = torch.cat(logits_epoch)
+        
+        # Append to binary file
+        append_tensor_to_file(logits_epoch, self.logits_path)
+
+
+    def _save_logits(self):
+        """Save binary logit file to WandB."""
+        logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
+        logit_artifact.add_file("logits.bin", name="logits_artifact")
+        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
+        self._del_wandb_cache()
+
+
+    def _ed_calculation(self) -> None:
+        """PCA and plot part of ED."""
+        ed_logits = read_tensors_from_file(self.logits_path, self.config)
+        
+        pca = PCA(n_components=3)
+        pca.fit(torch.stack(ed_logits).cpu().numpy())
+        
+        projected_1, projected_2, projected_3 = [], [], []
+        for row in ed_logits:
+            logits_epoch = rearrange(row, 'n -> 1 n').cpu().numpy()
+            projected_vector = pca.transform(logits_epoch)[0]
+            projected_1.append(projected_vector[0])
+            projected_2.append(projected_vector[1])
+            projected_3.append(projected_vector[2])
+        explained_variance = pca.explained_variance_ratio_
+        
+        plot_pca_plotly(projected_1, projected_2, projected_3, self.config)
+        plot_explained_var(explained_variance)
+        wandb.log({
+            "ED_PCA": wandb.Image("PCA.png"),
+            "explained_var": wandb.Image("pca_explained_var.png"),
+        })
+        
+        self._save_logits()
+    
+
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
         """Estimate RLCT for a given epoch during training.
 
@@ -240,9 +305,7 @@ class Run:
             
     def _save_model(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: SchedulerType, ema: ExponentialMovingAverage, idx: int) -> None:
         """Checkpoint model to AWS, WandB or local. Latter two not recommended due to frequency of ED checkpoints."""
-        context_manager = ema.average_parameters() if self.config.use_ema else no_op_context()
-        
-        with context_manager:
+        with self.context_manager:
             model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
             state = get_state_dict(model_to_save, optimizer, scheduler, ema)
         
@@ -300,7 +363,10 @@ class Run:
          # Shut down concurrent IO executor
         if self.config.model_save_method == "aws":
             self.executor.shutdown(wait=True)
-        
+            
+        if self.config.ed_train: 
+            self._ed_calculation()
+            
         if self.config.llc_train:
             self._save_rlct()
             
@@ -317,7 +383,10 @@ class Run:
                         print(f"Removed {cache_dir}")
                     except OSError as e: 
                         print(f"Failed to remove dir {cache_dir}.", e)
-                
+                        
+            if os.path.exists("logits.bin"): # Delete logits as these can take up to 30GB of storage
+                os.remove("logits.bin")
+                    
             shutil.rmtree("wandb")
         
     
