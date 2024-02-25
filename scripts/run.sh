@@ -25,7 +25,7 @@ weight_decay=1e-8
 chain_len=3500
 
 # Other
-workers=500
+workers=30
 
 for i in {1..1}
 do

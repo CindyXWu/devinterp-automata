@@ -1,6 +1,5 @@
 """"Make Run class which contains all relevant logic for instantiating and training."""
 from typing import Tuple, List, TypeVar
-import typing
 from pathlib import Path
 from tqdm import tqdm
 import wandb
@@ -11,7 +10,6 @@ import contextlib
 import subprocess
 from omegaconf import OmegaConf
 from functools import partial
-from sklearn.decomposition import PCA
 from einops import rearrange
 import s3fs
 import pandas as pd
@@ -19,8 +17,6 @@ import math
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-import threading
-from queue import Queue
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -31,8 +27,6 @@ from torch.utils.data import DataLoader
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
     extract_and_save_rlct_data,
-    plot_pca_plotly,
-    plot_explained_var,
 )
 from di_automata.tasks.data_utils import take_n
 from di_automata.config_setup import *
@@ -46,7 +40,6 @@ from di_automata.constructors import (
     get_state_dict,
     SchedulerType,
 )
-from di_automata.io import read_tensors_from_file, append_tensor_to_file
 Sweep = TypeVar("Sweep")
 
 # Path to root dir (with setup.py)
@@ -54,6 +47,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 # AWS S3 bucket
 s3 = s3fs.S3FileSystem()
+api = wandb.Api(timeout=60)
 
 
 class Run:
@@ -94,19 +88,8 @@ class Run:
         self._save_config()
         
         # Concurrent IO, bound to class instance
-        self.executor = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
-        self.logit_saver = ThreadPoolExecutor(max_workers=30)
-                          
-                                         
-    def writer_thread_function(self, path):
-        idx = 0
-        while idx < 50: # Stop if 50 consecutive calls and queue still empty
-            item = self.write_queue.get()
-            if item is None:
-                idx += 1 
-            tensor = item
-            append_tensor_to_file(tensor, path)
-            self.write_queue.task_done()
+        self.model_saver = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
+        self.logit_saver = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
             
         
     def train(self) -> None:
@@ -151,17 +134,14 @@ class Run:
                     
                 # Save models for ED at slightly less frequent rate
                 if self.idx % (self.config.rlct_config.ed_config.eval_frequency * 5) == 0:
-                    if self.config.model_save_method == "aws":
-                        self.executor.submit(
-                            self._save_model,
-                            self.model,
-                            self.optimizer,
-                            self.scheduler,
-                            self.ema,
-                            self.idx,
-                        )
-                    else:
-                        self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
+                    self.model_saver.submit(
+                        self._save_model,
+                        self.model,
+                        self.optimizer,
+                        self.scheduler,
+                        self.ema,
+                        self.idx,
+                    )
                 
                 self.idx += 1
                 
@@ -186,7 +166,7 @@ class Run:
             # # Or change naming of type so you can filter artifacts from run by checkpoints for ED and checkpoints for RLCT
             # if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0 and not iter_model_saved:
             #     if self.config.model_save_method == "aws":
-            #             self.executor.submit(
+            #             self.model_saver.submit(
             #                 self._save_model,
             #                 self.model,
             #                 self.optimizer,
@@ -349,7 +329,6 @@ class Run:
             "settings": wandb.Settings(start_method="thread"),
             "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
             "mode": "disabled" if not self.config.is_wandb_enabled else "online",
-            "timeout": 60,
         }
         self.run = wandb.init(**logger_params, entity=self.config.wandb_config.entity_name)
         # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
@@ -364,8 +343,7 @@ class Run:
         """Clean up last RLCT calculation, 
         Save logits, finish WandB run and delete large temporary folders.
         """
-        # Shut down concurrent IO executor
-        self.executor.shutdown(wait=True)
+        self.model_saver.shutdown(wait=True)
         self.logit_saver.shutdown(wait=True)
             
         if self.config.llc_train:

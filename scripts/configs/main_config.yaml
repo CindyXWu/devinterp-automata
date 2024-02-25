@@ -19,7 +19,7 @@ ema_decay: 0.9
 num_eval_batches: 100
 early_stop_patience: 20
 early_stop_acc_threshold: 99.9
-num_model_save_workers: 50
+num_model_save_workers: 30
 
 rlct_config:
   sampling_method: SGLD_MA
@@ -39,7 +39,7 @@ rlct_config:
 
   ed_config:
     batches_per_checkpoint: 150
-    eval_frequency: 3
+    eval_frequency: 2
 
   sgld_kwargs:
     lr: 5e-8
@@ -60,8 +60,8 @@ num_epochs: null
 
 optimizer_config:
   optimizer_type: ADAMW
-  default_lr: 1e-4
-  final_lr: 1e-5
+  default_lr: 1e-5
+  final_lr: 1e-6
   global_lr: 1.0
   optimizer_kwargs: {}
   per_param_lr: {}
