@@ -95,6 +95,7 @@ class Run:
         
         # Concurrent IO, bound to class instance
         self.executor = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
+        self.logit_saver = ThreadPoolExecutor(max_workers=30)
                           
                                          
     def writer_thread_function(self, path):
@@ -222,7 +223,6 @@ class Run:
     
     def _save_logits_cp(self, logits: torch.Tensor, idx: int):
         """Save logits from one checkpoint to WandB. Should be called asynchronously.
-        TODO: check for IO bandwidth rate limit.
         """
         torch.save(logits, f"logits_{idx}")
         logit_cp_artifact = wandb.Artifact(f"logits_cp_{idx}", type="logits_cp", description="Logits from one evaluation only.")
@@ -243,30 +243,6 @@ class Run:
         if os.path.exists("logits"):
             os.remove("logits")
         self._del_wandb_cache()
-
-
-    def _ed_calculation(self) -> None:
-        """PCA and plot part of ED."""
-        ed_logits = read_tensors_from_file(self.logits_path, self.config) if not self.ed_logits else self.ed_logits
-        
-        pca = PCA(n_components=3)
-        pca.fit(torch.stack(ed_logits).cpu().numpy())
-        
-        projected_1, projected_2, projected_3 = [], [], []
-        for row in ed_logits:
-            logits_epoch = rearrange(row, 'n -> 1 n').cpu().numpy()
-            projected_vector = pca.transform(logits_epoch)[0]
-            projected_1.append(projected_vector[0])
-            projected_2.append(projected_vector[1])
-            projected_3.append(projected_vector[2])
-        explained_variance = pca.explained_variance_ratio_
-        
-        plot_pca_plotly(projected_1, projected_2, projected_3, self.config)
-        plot_explained_var(explained_variance)
-        wandb.log({
-            "ED_PCA": wandb.Image("PCA.png"),
-            "explained_var": wandb.Image("pca_explained_var.png"),
-        })
     
 
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
@@ -373,6 +349,7 @@ class Run:
             "settings": wandb.Settings(start_method="thread"),
             "config": OmegaConf.to_container(self.config, resolve=True, throw_on_missing=True),
             "mode": "disabled" if not self.config.is_wandb_enabled else "online",
+            "timeout": 60,
         }
         self.run = wandb.init(**logger_params, entity=self.config.wandb_config.entity_name)
         # Probably won't do sweeps over these - okay to put here relative to call to update_with_wandb_config() below
@@ -387,19 +364,15 @@ class Run:
         """Clean up last RLCT calculation, 
         Save logits, finish WandB run and delete large temporary folders.
         """
-         # Shut down concurrent IO executor
-        if self.config.model_save_method == "aws":
-            self.executor.shutdown(wait=True)
-            
-        if self.config.ed_train: 
-            self._ed_calculation()
+        # Shut down concurrent IO executor
+        self.executor.shutdown(wait=True)
+        self.logit_saver.shutdown(wait=True)
             
         if self.config.llc_train:
             self._save_rlct()
             
         if self.config.is_wandb_enabled:
             wandb.finish()
-            
             # Sleep a bit before deleting anything
             time.sleep(60)
             
@@ -413,7 +386,7 @@ class Run:
                         
             if os.path.exists("logits.bin"): # Delete logits as these can take up to 30GB of storage
                 os.remove("logits.bin")
-                    
+                
             shutil.rmtree("wandb")
         
     

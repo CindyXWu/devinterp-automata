@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from queue import Queue
 from omegaconf import OmegaConf
 
 import torch
@@ -68,10 +69,14 @@ class PostRunSLT:
         self.steps = self.history["_step"]
 
         # Get artifacts from old run
-        artifacts = run_api.logged_artifacts()
-        self.artifact_queue = Queue()
-        for artifact in run_api.logged_artifacts():
-            self.artifact_queue.put(artifact)
+        self.state_queue = Queue()
+        self.logits_queue = Queue()
+        for artifact in self.run_api.logged_artifacts():
+            if artifact.type == "states":
+                self.state_queue.put(artifact)
+            elif artifact.type == "logits_cp":
+                self.logits_queue.put(artifact)
+            
 
         # self.config: MainConfig = OmegaConf.create(self.run_api.config)
         self.config = self._get_config()
@@ -87,16 +92,15 @@ class PostRunSLT:
         
         self.model, param_inf_properties = construct_model(self.config)
         
+        # SLT stuff
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_criterion = construct_rlct_criterion(self.config)
-        # Optional: currently don't use as local logits take up a lot of storage
-        self.logits_path = "logits.bin" # Binary file
     
     
     def do_ed(self):
         """Main executable function of this class."""
         if self.slt_config.ed:
-            ed_logits: list[torch.Tensor] = self._get_ed_logits_from_checkpoints()
+            ed_logits = self._get_ed_logits_from_checkpoints()
             ed_logits: list[torch.Tensor] = self._truncate_ed_logits(ed_logits)
             ed_projected_samples = self._ed_calculation(ed_logits)
     
@@ -109,8 +113,7 @@ class PostRunSLT:
         """After analysing initial osculating circle plot, choose marked cusp data points.
         Use these to plot a form potential plot over time steps.
         """
-        ed_logits = read_tensors_from_file(self.logits_path, self.config)
-        form_potential_plotter = FormPotentialPlotter(ed_logits, self.steps, self.slt_config, self.run_name)
+        form_potential_plotter = FormPotentialPlotter(self.ed_logits, self.steps, self.slt_config, self.run_name)
         form_potential_plotter.plot()
     
     
@@ -146,7 +149,7 @@ class PostRunSLT:
         """
         match self.config.model_save_method:
             case "wandb":
-                artifact = self.artifact_queue.get()
+                artifact = self.state_queue.get()
                 data_dir = artifact.download()
                 model_state_path = Path(data_dir) / "states.torch"
                 states = torch.load(model_state_path)
@@ -168,19 +171,33 @@ class PostRunSLT:
         return OmegaConf.load(config_path)
     
     
+    # def _load_ed_logits(self) -> None:
+    #     """Load ED logits from WandB.
+    #     Deprecated method from when I used to save all logits in one go.
+    #     """
+    #     artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
+    #     data_dir = artifact.download()
+    #     logit_path = Path(data_dir) / "logits_artifact"
+    #     self.ed_logits = torch.load(logit_path)
+    
+    
     def _load_ed_logits(self) -> None:
-        """Load ED logits from WandB."""
-        # artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
-        artifact = self.api.artifact(f"{self.run_path}/logits:test")
-        data_dir = artifact.download()
-        logit_path = Path(data_dir) / "logits_artifact"
-        self.ed_logits = torch.load(logit_path)
+        """Load ED logits from WandB when they are saved for each checkpoint separately.
+        """
+        ed_logits = []
+        
+        for checkpoint_idx in range(1, self.config.num_training_iter // self.config.rlct_config.ed_config.eval_frequency):
+            idx = checkpoint_idx * self.config.rlct_config.ed_config.eval_frequency
+            artifact = self.logits_queue.get()
+            data_dir = artifact.download()
+            logit_path = Path(data_dir) / f"logits_cp_{idx}"
+            ed_logits.append(torch.load(logit_path))
+            
+        return ed_logits
     
     
     def _get_ed_logits_from_checkpoints(self) -> list[torch.Tensor]:
-        """Two options:
-        1. Load logits directly from WandB (recommended).
-        2. For each checkpoint, do forward pass to obtain logits and save.
+        """Based on current IO, need to load logits directly from WandB.
         """
         if self.config.use_logits:
             ed_logits = self._load_ed_logits()
@@ -240,16 +257,12 @@ class PostRunSLT:
         return ed_logits
         
     
-    def _ed_calculation(self, ed_logits: Optional[list[torch.Tensor]]) -> np.ndarray:
+    def _ed_calculation(self, ed_logits: list[torch.Tensor]) -> np.ndarray:
         """PCA and plot part of ED.
         
         Diplay top 3 components against each other and show fraction variance explained.
+        Save projected PCA samples and PCA object in separate files for later plotting.
         """
-        if os.path.exists(self.logits_path):
-            ed_logits = read_tensors_from_file(self.logits_path, self.config)
-            # Delete logits as these can take up to 30GB of storage
-            os.remove("logits.bin")
-        
         pca = PCA(n_components=3)
         pca.fit(ed_logits.cpu().numpy())
         
@@ -276,19 +289,8 @@ class PostRunSLT:
         pca_file_path = f"pca_{self.config.run_name}.pkl"
         with open(pca_file_path, 'wb') as f:
             pickle.dump(pca, f)
-
-        ## Try to avoid saving logits to WandB because they can be REAL CHONK (50-100GB PER RUN)
-        # self._save_logits_wandb() 
         
         return pca_projected_samples
-    
-    
-    # def _save_logits_wandb(self):
-    #     """Deprecated - save logits to WandB."""
-    #     logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-    #     logit_artifact.add_file("logits.bin", name="logits_artifact")
-    #     wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
-    #     self._del_wandb_cache()
         
     
     def calculate_rlct(self):
