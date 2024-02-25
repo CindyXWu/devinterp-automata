@@ -16,7 +16,8 @@ import pandas as pd
 import math
 import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import traceback
 from torch_ema import ExponentialMovingAverage
 
 import torch
@@ -130,22 +131,12 @@ class Run:
 
                 # ED logit evaluation
                 if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
-                    self._ed_data_training(self.model, self.ema)
-                    
-                # Save models for ED at slightly less frequent rate
-                if self.idx % (self.config.rlct_config.ed_config.eval_frequency * 5) == 0:
-                    if self.config.model_save_method == "aws":
-                        self.model_saver.submit(
-                            self._save_model,
-                            self.model,
-                            self.optimizer,
-                            self.scheduler,
-                            self.ema,
-                            self.idx,
-                        )
-                    else:
-                        self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
-                
+                    # logit_future = self.logit_saver.submit(self._ed_data_training, self.model, self.ema, self.idx)
+                    # logit_future.add_done_callback(task_done)
+                    self._ed_data_training(self.model, self.ema, self.idx)
+                    model_future = self.model_saver.submit(self._save_model, self.model, self.optimizer, self.scheduler, self.ema, self.idx)
+                    model_future.add_done_callback(task_done)
+                                
                 self.idx += 1
                 
             train_acc, train_loss, eval_acc, eval_loss = self._evaluation_step(logits.shape)
@@ -168,21 +159,12 @@ class Run:
             # # TODO: deprecate RLCT calculation during training and relegate to running on the ED checkpoints
             # # Or change naming of type so you can filter artifacts from run by checkpoints for ED and checkpoints for RLCT
             # if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0 and not iter_model_saved:
-            #     if self.config.model_save_method == "aws":
-            #             self.model_saver.submit(
-            #                 self._save_model,
-            #                 self.model,
-            #                 self.optimizer,
-            #                 self.scheduler,
-            #                 self.ema,
-            #                 self.idx,
-            #             )
-            #     else:
-            #         self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
+            #     model_future = self.model_saver.submit(self._save_model, self.model, self.optimizer, self.scheduler, self.ema, self.idx)
+            #     model_future.add_done_callback(task_done)
 
 
-    def _ed_data_training(self, model: torch.nn.Module, ema: ExponentialMovingAverage) -> None:
-        """Collect essential dynamics logit data each epoch.
+    def _ed_data_training(self, model: torch.nn.Module, ema: ExponentialMovingAverage, idx: int) -> None:
+        """Collect essential dynamics logit data for each checkpoint.
         Make sure anything mutable during training is passed, since this function will be called in multithreading.
         """
         logits_cp = []
@@ -195,40 +177,69 @@ class Run:
                     logits = model(inputs)
                     # Flatten over batch, class and sequence dimension
                     logits_cp.append(rearrange(logits, 'b c s -> (b c s)'))
-        self.model.train()
+        model.train()
         
         # Concat all per-batch logits over batch dimension to form one super-batch
         logits_cp = torch.cat(logits_cp)
+
+        logit_future = self.logit_saver.submit(self._save_logits_cp, logits_cp, idx)
+        logit_future.add_done_callback(task_done)
+
+    
+    def _save_logits_cp(self, logits_cp: torch.Tensor, idx: int):
+        """Save logits for each checkpoint."""
+        torch.save(logits_cp, f"logits_cp_{idx}.torch")
+        logit_artifact = wandb.Artifact(f"logits_cp_{idx}", type="logits_cp", description="Logits from one evaluation only.")
+        logit_artifact.add_file(f"logits_cp_{idx}.torch")
+        wandb.log_artifact(logit_artifact, aliases=[f"logits_cp_{idx}_{self.config.run_name}_{self.config.time}"])
+        os.remove(f"logits_cp_{idx}.torch")
+
+
+    # def save_logits(self):
+    #     """Save complete ed_logits list to WandB as one file, if it exists.
+    #     Currently deprecated: logits are saved directly to WandB.
+    #     """
+    #     logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
+    #     if self.ed_logits:
+    #         torch.save(self.ed_logits, "logits")
+    #         logit_artifact.add_file("logits")
+    #     wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
         
-        # Save logits from one epoch
-        # self.logit_saver.submit(self._save_logits_cp, logits_cp, self.idx)
-        self._save_logits_cp(logits_cp, self.idx)
-    
-    
-    def _save_logits_cp(self, logits: torch.Tensor, idx: int):
-        """Save logits from one checkpoint to WandB. Should be called asynchronously.
-        """
-        torch.save(logits, f"logits_{idx}")
-        logit_cp_artifact = wandb.Artifact(f"logits_cp_{idx}", type="logits_cp", description="Logits from one evaluation only.")
-        wandb.log_artifact(logit_cp_artifact, aliases=[f"logits_cp_{idx}_{self.config.run_name}_{self.config.time}"])
-        os.remove(f"logits_{idx}")
+    #     if os.path.exists("logits"): os.remove("logits")
 
 
-    def save_logits(self):
-        """Save complete ed_logits list to WandB as one file, if it exists.
-        Currently deprecated: logits are saved directly to WandB.
-        """
-        logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-        if self.ed_logits:
-            torch.save(self.ed_logits, "logits")
-            logit_artifact.add_file("logits")
-        wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
+    def _save_config(self) -> None:
+        """Only called once to prevent saving config multiple times."""
+        model_artifact = wandb.Artifact(f"config", type="config", description="Config after run-time attributes filled in.")
+        with open(".hydra/config.yaml", "w") as file:
+            file.write(OmegaConf.to_yaml(self.config)) # Necessary: Hydra automatic config file does not include Pydantic run-time attributes and wrong thing will be logged and cause a nasty bug
+        model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
+        wandb.log_artifact(model_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
+            
+            
+    def _save_model(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: SchedulerType, ema: ExponentialMovingAverage, idx: int) -> None:
+        """Checkpoint model to AWS, WandB or local. Latter two not recommended due to frequency of ED checkpoints."""
+        context_manager = ema.average_parameters() if self.config.use_ema else no_op_context()
+        with context_manager:
+            model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
+            state = get_state_dict(model_to_save, optimizer, scheduler, ema)
         
-        if os.path.exists("logits"):
-            os.remove("logits")
-        self._del_wandb_cache()
+        match self.config.model_save_method:
+            case "wandb":
+                torch.save(
+                    state, # Save optimizer, model, scheduler, EMA all in one go
+                    f"states_{idx}.torch", # Working directory configured by Hydra as output directory
+                )
+                model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
+                model_artifact.add_file(f"states_{idx}.torch")
+                wandb.log_artifact(model_artifact, aliases=[f"idx{idx}_{self.config.run_name}_{self.config.time}"])
+                os.remove(f"states_{idx}.torch") # Delete file to prevent clogging up
+            case "aws":
+                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}.pth', mode='wb') as file:
+                    torch.save(state, file)
+                print("Saved model to AWS")
+                
     
-
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:
         """Estimate RLCT for a given epoch during training.
 
@@ -279,51 +290,6 @@ class Run:
         wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "Eval Acc": eval_acc, "Eval Loss": eval_loss, "LR": self.scheduler.get_lr()}, step=self.idx)
         
         return train_acc, train_loss, eval_acc, eval_loss
-
-
-    def _save_config(self) -> None:
-        """Only called once to prevent saving config multiple times."""
-        model_artifact = wandb.Artifact(f"config", type="config", description="Config after run-time attributes filled in.")
-        with open(".hydra/config.yaml", "w") as file:
-            file.write(OmegaConf.to_yaml(self.config)) # Necessary: Hydra automatic config file does not include Pydantic run-time attributes and wrong thing will be logged and cause a nasty bug
-        model_artifact.add_file(".hydra/config.yaml", name="config.yaml")
-        wandb.log_artifact(model_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
-            
-            
-    def _save_model(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: SchedulerType, ema: ExponentialMovingAverage, idx: int) -> None:
-        """Checkpoint model to AWS, WandB or local. Latter two not recommended due to frequency of ED checkpoints."""
-        context_manager = ema.average_parameters() if self.config.use_ema else no_op_context()
-        with context_manager:
-            model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
-            state = get_state_dict(model_to_save, optimizer, scheduler, ema)
-        
-        match self.config.model_save_method:
-            case "wandb":
-                torch.save(
-                    state, # Save optimizer, model, scheduler, EMA all in one go
-                    Path(".") / "states.torch", # Working directory configured by Hydra as output directory
-                )
-                model_artifact = wandb.Artifact(f"states", type="states", description="The trained model state_dict")
-                model_artifact.add_file(f"states.torch")
-                wandb.log_artifact(model_artifact, aliases=[f"idx{idx}_{self.config.run_name}_{self.config.time}"])
-                os.remove("states.torch") # Delete file to prevent clogging up
-            case "aws":
-                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}.pth', mode='wb') as file:
-                    torch.save(state, file)
-                print("Saved model to AWS")
-            
-            
-    def _clean_sweep(self, sweep: "Sweep") -> List["Sweep"]:
-        """Get rid of wandb runs that crashed with _step = None."""
-        def _clean_sweep():
-            for r in sweep.runs:
-                if r.summary.get("_step", None) is None:
-                    r.delete()
-                    yield r
-
-        return list(r for r in _clean_sweep())
-    
-    
     def _set_logger(self) -> None:
         """Currently uses WandB as default."""
         logging.info(f"Hydra current working directory: {os.getcwd()}")
@@ -378,46 +344,6 @@ class Run:
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except:
             print("Cache file deletion skipped.")
-        
-    
-    def _del_wandb_cache(self):
-        command = ['wandb', 'artifact', 'cache', 'cleanup', "--remove-temp", "1GB"]
-        try:
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except:
-            print("Cache file deletion skipped.")
-        
-        for cache_dir in self.wandb_cache_dirs:
-            if cache_dir.is_dir():
-                try: 
-                    shutil.rmtree(cache_dir)
-                    print(f"Removed {cache_dir}")
-                except OSError as e: 
-                    print(f"Failed to remove dir {cache_dir}.", e)
-                    
-                    
-    def _restore_model(self, resume_training: bool = False) -> None:
-        """Restore from a checkpoint on WandB.
-        TODO: Currently not in use.
-        """
-        artifact = self.run.use_artifact(f"{self.config.wandb_config.entity_name}/{self.config.wandb_config.wandb_project_name}/states:idx{self.idx}_{self.config.run_name}_{self.config.time}")
-        data_dir = artifact.download()
-        model_state_path = Path(data_dir) / "states.torch"
-        states = torch.load(model_state_path)
-        
-        self.model_state_dict, optimizer_state_dict, scheduler_state_dict, ema_state_dict = states["model"], states["optimizer"], states["scheduler"], states["ema"]
-        
-        if resume_training:
-            # Only need below code if a) passing ref model in and doing deepcopy;
-            # b) using this function outside of RLCT estimation for e.g. resuming training
-            model, _ = construct_model(self.config)
-            model.load_state_dict(self.model_state_dict)
-            model.to(self.device)
-            model.train()
-            # self.model = torch.compile(model) # Not available on Windows
-            self.optimizer.load_state_dict(optimizer_state_dict)
-            self.scheduler.load_state_dict(scheduler_state_dict)
-            self.ema.load_state_dict(ema_state_dict)
 
            
 @torch.no_grad()
@@ -477,3 +403,12 @@ def update_with_wandb_config(config: OmegaConf, sweep_params: list[str]) -> Omeg
 @contextlib.contextmanager
 def no_op_context():
     yield
+
+
+def task_done(future):
+    """Callback function to handle task completion"""
+    try: # Raise an exception if the task threw one
+        future.result()
+    except Exception as e:
+        print(f"Multithreading task failed with exception: {e}")
+        traceback.print_exc()

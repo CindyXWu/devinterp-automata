@@ -5,6 +5,7 @@ di_automata/__init__.py
 di_automata/config_setup.py
 di_automata/constructors.py
 di_automata/dataloader_utils.py
+di_automata/io.py
 di_automata/losses.py
 di_automata/slt_analysis.py
 di_automata/train_utils.py
