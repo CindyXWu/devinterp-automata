@@ -134,14 +134,17 @@ class Run:
                     
                 # Save models for ED at slightly less frequent rate
                 if self.idx % (self.config.rlct_config.ed_config.eval_frequency * 5) == 0:
-                    self.model_saver.submit(
-                        self._save_model,
-                        self.model,
-                        self.optimizer,
-                        self.scheduler,
-                        self.ema,
-                        self.idx,
-                    )
+                    if self.config.model_save_method == "aws":
+                        self.model_saver.submit(
+                            self._save_model,
+                            self.model,
+                            self.optimizer,
+                            self.scheduler,
+                            self.ema,
+                            self.idx,
+                        )
+                    else:
+                        self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
                 
                 self.idx += 1
                 
@@ -198,7 +201,8 @@ class Run:
         logits_cp = torch.cat(logits_cp)
         
         # Save logits from one epoch
-        self.logit_saver.submit(self._save_logits_cp, logits_cp, self.idx)
+        # self.logit_saver.submit(self._save_logits_cp, logits_cp, self.idx)
+        self._save_logits_cp(logits_cp, self.idx)
     
     
     def _save_logits_cp(self, logits: torch.Tensor, idx: int):
@@ -288,7 +292,7 @@ class Run:
             
     def _save_model(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: SchedulerType, ema: ExponentialMovingAverage, idx: int) -> None:
         """Checkpoint model to AWS, WandB or local. Latter two not recommended due to frequency of ED checkpoints."""
-        context_manager = self.ema.average_parameters() if self.config.use_ema else no_op_context()
+        context_manager = ema.average_parameters() if self.config.use_ema else no_op_context()
         with context_manager:
             model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
             state = get_state_dict(model_to_save, optimizer, scheduler, ema)
@@ -304,7 +308,7 @@ class Run:
                 wandb.log_artifact(model_artifact, aliases=[f"idx{idx}_{self.config.run_name}_{self.config.time}"])
                 os.remove("states.torch") # Delete file to prevent clogging up
             case "aws":
-                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{self.idx}.pth', mode='wb') as file:
+                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}.pth', mode='wb') as file:
                     torch.save(state, file)
                 print("Saved model to AWS")
             

@@ -60,8 +60,8 @@ num_epochs: null
 
 optimizer_config:
   optimizer_type: ADAMW
-  default_lr: 1e-5
-  final_lr: 1e-6
+  default_lr: 1e-4
+  final_lr: 1e-5
   global_lr: 1.0
   optimizer_kwargs: {}
   per_param_lr: {}
