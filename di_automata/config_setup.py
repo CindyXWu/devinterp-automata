@@ -612,6 +612,7 @@ class PostRunSLTConfig(BaseModel):
     ed: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
     form: bool = Field(default=False, description="Whether to plot form potential over time. Requires marked_cusp_data to be not None in EDPlotConfig.")
     use_logits: bool = Field(default=True, description="Whether to load logits directly for ED calculations.")
+    save_logits_cp: bool = Field(default=True, description="Save logits from each checkpoint directly to WandB at ED frequency. Used because we save the model checkpoints less frequently (for now).")
     
     ## WandB
     wandb_project_name: str = Field(default="devinterp-automata")

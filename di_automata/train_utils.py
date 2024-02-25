@@ -58,8 +58,6 @@ s3 = s3fs.S3FileSystem()
 
 class Run:
     def __init__(self, config: MainConfig):
-        self.SAVE_LOGITS_CP = False
-        
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         self.config = config
@@ -86,9 +84,6 @@ class Run:
         self.rlct_folder = Path(__file__).parent / self.config.rlct_config.rlct_data_dir
         self.rlct_folder.mkdir(parents=True, exist_ok=True)
         self.rlct_criterion = construct_rlct_criterion(self.config)
-
-        # self.logits_path = "logits.bin" # Binary file
-        self.ed_logits = []
         
         # Set time and use it as a distinguishing parameter for this run
         self.config["time"] = datetime.now().strftime("%m_%d_%H_%M")
@@ -100,7 +95,6 @@ class Run:
         
         # Concurrent IO, bound to class instance
         self.executor = ThreadPoolExecutor(max_workers=config.num_model_save_workers)
-        self.logit_saver = ThreadPoolExecutor(max_workers=30)
                           
                                          
     def writer_thread_function(self, path):
@@ -129,12 +123,8 @@ class Run:
 
             self.num_iter = self.config.eval_frequency if epoch + 1 <= self.config.num_training_iter / self.config.eval_frequency  else self.config.num_training_iter % self.config.eval_frequency
             
-            for data in take_n(self.train_loader, self.num_iter): # Compatible with HF dataset format where data is a dictionary
-                # all_idxs is a list of idxs (not useful)
-                iter_model_saved = False
-    
+            for data in take_n(self.train_loader, self.num_iter):
                 inputs, labels = data["input_ids"].to(self.device), data["label_ids"].to(self.device)
-                
                 logits = self.model(inputs)
 
                 self.optimizer.zero_grad()
@@ -171,7 +161,6 @@ class Run:
                         )
                     else:
                         self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
-                    iter_model_saved = True
                 
                 self.idx += 1
                 
@@ -190,21 +179,24 @@ class Run:
 
             if self.config.llc_train: self._rlct_training()
             
-            # For ED: save model but do not log other metrics at this frequency
-            if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0 and not iter_model_saved:
-                if self.config.model_save_method == "aws":
-                    self.executor.submit(
-                        self._save_model,
-                        self.model,
-                        self.optimizer,
-                        self.scheduler,
-                        self.ema,
-                        self.idx,
-                    )
-                else:
-                    self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
+            # # For RLCT calculations every epoch
+            # # Removed because if saving RLCT in between regular ED model saving, will be harder to pull correct data from WandB
+            # # TODO: deprecate RLCT calculation during training and relegate to running on the ED checkpoints
+            # # Or change naming of type so you can filter artifacts from run by checkpoints for ED and checkpoints for RLCT
+            # if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0 and not iter_model_saved:
+            #     if self.config.model_save_method == "aws":
+            #             self.executor.submit(
+            #                 self._save_model,
+            #                 self.model,
+            #                 self.optimizer,
+            #                 self.scheduler,
+            #                 self.ema,
+            #                 self.idx,
+            #             )
+            #     else:
+            #         self._save_model(self.model, self.optimizer, self.scheduler, self.ema, self.idx)
 
-    
+
     def _ed_data_training(self, model: torch.nn.Module, ema: ExponentialMovingAverage) -> None:
         """Collect essential dynamics logit data each epoch.
         Make sure anything mutable during training is passed, since this function will be called in multithreading.
@@ -223,11 +215,9 @@ class Run:
         
         # Concat all per-batch logits over batch dimension to form one super-batch
         logits_cp = torch.cat(logits_cp)
-        self.ed_logits.append(logits_cp)
         
         # Save logits from one epoch
-        if self.SAVE_LOGITS_CP:
-            self.logit_saver.submit(self._save_logits_cp, logits_cp, self.idx)
+        self.logit_saver.submit(self._save_logits_cp, logits_cp, self.idx)
     
     
     def _save_logits_cp(self, logits: torch.Tensor, idx: int):
@@ -240,8 +230,10 @@ class Run:
         os.remove(f"logits_{idx}")
 
 
-    def _save_logits(self):
-        """Save complete ed_logits list to WandB as one file, if it exists."""
+    def save_logits(self):
+        """Save complete ed_logits list to WandB as one file, if it exists.
+        Currently deprecated: logits are saved directly to WandB.
+        """
         logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
         if self.ed_logits:
             torch.save(self.ed_logits, "logits")
@@ -275,8 +267,6 @@ class Run:
             "ED_PCA": wandb.Image("PCA.png"),
             "explained_var": wandb.Image("pca_explained_var.png"),
         })
-        
-        self._save_logits()
     
 
     def _rlct_training(self) -> tuple[Union[float, pd.DataFrame], ...]:

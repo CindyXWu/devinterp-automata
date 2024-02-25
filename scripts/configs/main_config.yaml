@@ -8,6 +8,7 @@ llc_train: false
 ed_train: true
 use_ema: true
 use_scratchpad: false
+save_logits_cp: true
 
 model_save_method: wandb
 aws_bucket: s3://automata-devinterp-01/my_checkpoints/
@@ -18,7 +19,7 @@ ema_decay: 0.9
 num_eval_batches: 100
 early_stop_patience: 20
 early_stop_acc_threshold: 99.9
-num_model_save_workers: 1000
+num_model_save_workers: 100
 
 rlct_config:
   sampling_method: SGLD_MA
