@@ -14,7 +14,7 @@ form="False"
 run_idx=0
 
 # Hyperparams
-lr=8e-4
+lr=1e-4
 its=15000
 layers=3
 seq_len=25

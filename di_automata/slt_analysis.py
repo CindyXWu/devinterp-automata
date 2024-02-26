@@ -100,6 +100,8 @@ class PostRunSLT:
         # SLT stuff
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_criterion = construct_rlct_criterion(self.config)
+        self.logits_file_path = Path(__file__).parent / f"logits_{self.config.run_name}_{self.config.time}"
+        self.num_cps_to_analyse = self.config.num_training_iter // (self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps)
 
     
     def do_ed(self):
@@ -159,26 +161,28 @@ class PostRunSLT:
     def _load_logits_cp(self) -> torch.Tensor:
         """Load logits from WandB for each checkpoint via multithreading.
         """
-        logits_file_path = Path(__file__).parent / f"logits_{self.run_name}_{self.config.time}"
-        
-        if os.path.exists(logits_file_path):
-            print("Loading existing logits")
-            ed_logits = torch.load(logits_file_path)
+        if os.path.exists(self.logits_file_path):
+            print(f"Loading existing logits from {self.logits_file_path}")
+            ed_logits = torch.load(self.logits_file_path)
             print("Done loading existing logits")
         else:
-            print("Getting artifacts")
-            logit_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "logits_cp"]
-            logit_artifacts = sorted(logit_artifacts, key=extract_number)
-            self.logit_artifacts = logit_artifacts[::self.slt_config.skip_cps]
-            
-            ed_logits = torch.empty((len(self.logit_artifacts), self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
+            ed_logits = torch.zeros((self.num_cps_to_analyse, self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
+
+            if self.config.model_save_method == "wandb":
+                print("Getting WandB artifacts")
+                logit_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "logits_cp"]
+                logit_artifacts = sorted(logit_artifacts, key=extract_number)
+                self.logit_artifacts = logit_artifacts[::self.slt_config.skip_cps]
+            elif self.config.model_save_method == "aws":
+                print("Getting AWS checkpoints")
             
             with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = [executor.submit(self._load_logits_single_cp, cp_idx, ed_logits) for cp_idx in range(len(self.logit_artifacts))]
+                futures = [executor.submit(self._load_logits_single_cp, cp_idx, ed_logits) for cp_idx in range(self.num_cps_to_analyse)]
                 for future in tqdm(futures):
                     future.result()  # Wait for all futures to complete
-    
-            torch.save(ed_logits, logits_file_path)
+
+            # assert check_no_zero_rows(ed_logits), "Error in loading ed logits and contains missing data"
+            torch.save(ed_logits, self.logits_file_path)
         
         return ed_logits
 
@@ -189,10 +193,16 @@ class PostRunSLT:
         """
         try:
             idx = cp_idx * self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps
-            artifact = self.logit_artifacts[cp_idx]
-            data_dir = artifact.download()
-            logit_path = Path(data_dir) / f"logits_cp_{idx}.torch"
-            ed_logits[cp_idx] = torch.load(logit_path)
+            match self.config.model_save_method:
+                case "wandb":
+                    artifact = self.logit_artifacts[cp_idx]
+                    data_dir = artifact.download()
+                    logit_path = Path(data_dir) / f"logits_cp_{idx}.torch"
+                    ed_logits[cp_idx] = torch.load(logit_path)
+                case "aws":
+                    with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/logits_cp_{idx}.pth', mode='rb') as file:
+                        ed_logits[cp_idx] = torch.load(file)
+                    
         except Exception as e:
             print(f"Error fetching logits at step {idx}: {e}")
 
@@ -202,22 +212,26 @@ class PostRunSLT:
         Only use for out of distribution evaluations where logits saved on WandB don't suffice.
         Uses multiprocess.
         """
-        logits_file_path = Path(__file__).parent / f"logits_{self.run_name}_{self.config.time}"
-        
-        if os.path.exists(logits_file_path):
-            ed_logits = torch.load(logits_file_path)
+        if os.path.exists(self.logits_file_path):
+            ed_logits = torch.load(self.logits_file_path)
+            print("Done loading existing logits")
         else:
-            state_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "states"]
-            self.state_artifacts = sorted(state_artifacts, key=extract_number)
-            
-            ed_logits = torch.empty((len(self.logit_artifacts), self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
+            ed_logits = torch.zeros((self.num_cps_to_analyse, self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
+
+            if self.config.model_save_method == "wandb":
+                print("Getting WandB artifacts")
+                state_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "states"]
+                self.state_artifacts = sorted(state_artifacts, key=extract_number)
+            else:
+                print("Getting AWS checkpoints")
 
             with ThreadPoolExecutor(max_workers=10) as executor:
-                    futures = [executor.submit(self._load_logits_states_single_cp, cp_idx, ed_logits, self.model, self.ed_loader) for cp_idx in range(len(self.logit_artifacts))]
+                    futures = [executor.submit(self._load_logits_states_single_cp, cp_idx, ed_logits, self.model, self.ed_loader) for cp_idx in range(self.num_cps_to_analyse)]
                     for future in tqdm(futures):
                         future.result()  # Wait for all futures to complete
-        
-            torch.save(ed_logits, logits_file_path)
+
+            # assert check_no_zero_rows(ed_logits), "Error in loading ed logits and contains missing data"
+            torch.save(ed_logits, self.logits_file_path)
             
         return ed_logits
 
@@ -226,23 +240,33 @@ class PostRunSLT:
         """Load just a single cp state and do inference to get logits.
         This function is designed to be called in multithreading and is called by the above function.
         """
-        idx = cp_idx * self.config.rlct_config.ed_config.eval_frequency
-        artifact = self.state_artifacts[cp_idx]
-        data_dir = artifact.download()
-        state_path = Path(data_dir) / f"states_{idx}.torch"
-        model.load_state_dict(state_dict)
-        
-        logits_cp = []
-        with torch.no_grad():
-            for data in take_n(ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
-                inputs = data["input_ids"].to(self.device)
-                logits = model(inputs)
-                # Flatten over batch, class and sequence dimension
-                logits_cp.append(rearrange(logits, 'b c s -> (b c s)'))
-        
-        # Concat all per-batch logits over batch dimension to form one super-batch
-        logits_cp = torch.cat(logits_cp)
-        ed_logits[cp_idx] = logits_cp
+        try:
+            idx = cp_idx * self.config.rlct_config.ed_config.eval_frequency
+            match self.config.model_save_method:
+                case "wandb":
+                    artifact = self.state_artifacts[cp_idx]
+                    data_dir = artifact.download()
+                    state_path = Path(data_dir) / f"states_{idx}.torch"
+                    state_dict = torch.load(state_path)
+                case "aws":
+                    with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/states_{idx}.pth', mode='rb') as file:
+                        state_dict = torch.load(file)
+            model.load_state_dict(state_dict)
+            
+            logits_cp = []
+            with torch.no_grad():
+                for data in take_n(ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
+                    inputs = data["input_ids"].to(self.device)
+                    logits = model(inputs)
+                    # Flatten over batch, class and sequence dimension
+                    logits_cp.append(rearrange(logits, 'b c s -> (b c s)'))
+            
+            # Concat all per-batch logits over batch dimension to form one super-batch
+            logits_cp = torch.cat(logits_cp)
+            ed_logits[cp_idx] = logits_cp
+            
+        except Exception as e:
+            print(f"Error fetching state dict at step {idx}: {e}")
         
     
     def _truncate_ed_logits(self, ed_logits: list[torch.Tensor]) -> None:
@@ -376,11 +400,11 @@ class PostRunSLT:
             shutil.rmtree("wandb")
 
 
-    # def _load_ed_logits(self) -> None:
-    #     """Load all ED logits from WandB.
-    #     Deprecated method from when I used to save all logits in one go.
-    #     """
-    #     artifact = self.api.artifact(f"{self.run_path}/logits:{self.run_name}")
-    #     data_dir = artifact.download()
-    #     logit_path = Path(data_dir) / "logits_artifact"
-    #     self.ed_logits = torch.load(logit_path)
+def check_no_zero_rows(tensor: torch.Tensor) -> bool:
+    """Check if there's any non-zero element in each row of a torch tensor.
+    Return true if there is at least one non-zero element in each row.
+    """
+    # torch.any returns True if there's at least one non-zero element in the row
+    not_zero_rows = torch.any(tensor != 0, dim=1)
+    # Ensure all rows have at least one non-zero element
+    return torch.all(not_zero_rows)
