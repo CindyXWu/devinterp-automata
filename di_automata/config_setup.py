@@ -602,10 +602,11 @@ class PostRunSLTConfig(BaseModel):
     seq_len: int
     truncate_its: Optional[int] = Field(default=None, description="Truncate training iterations to this number.")
     
-    ## Early stopping/truncation
+    ## Early stopping/truncation/checkpointing
     early_stop_patience: Optional[int] = Field(default=5, description="Number of evaluation steps with no improvement in log loss before stopping.")
     early_stop_smoothing_window: Optional[int] = Field(default=5, description="Size of moving average window to smooth out loss.")
     early_stop_acc_threshold: Optional[float] = Field(default=99.9, description="Percent accuracy to immediately stop training at.")
+    skip_cps: int = Field(default=1, description="How many logged checkpoints to skip between downloads for analysis.")
     
     ## Flags
     llc: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")

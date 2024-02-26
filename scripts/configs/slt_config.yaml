@@ -14,11 +14,12 @@ wandb_project_name: devinterp-automata
 entity_name: wu-cindyx
 
 lr: 1e-4
-num_training_iter: 14000
+num_training_iter: 15000
 early_stop_patience: 10
 early_stop_smoothing_window: 5
 early_stop_acc_threshold: 99.9
 truncate_its: null # Set to null if you want to automatically truncate using above settings
+skip_cps: 2
 
 n_layers: 3
 seq_len: 25
@@ -39,7 +40,7 @@ rlct_config:
   use_distill_loss: true
 
   ed_config:
-    batches_per_checkpoint: 300
+    batches_per_checkpoint: 150
     eval_frequency: 10
 
   sgld_kwargs:
@@ -68,8 +69,8 @@ ed_plot_config:
   osculate_start: 1
   osculate_end_offset: 0
   osculate_skip: 10
-  smoothing_sigma_early: 10
-  smoothing_sigma_late: 20
+  smoothing_sigma_early: 100
+  smoothing_sigma_late: 100
   smoothing_late_boundary: 100
   show_vertex_influence: false
   ed_folder: ed_data

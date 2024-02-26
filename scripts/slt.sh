@@ -14,14 +14,14 @@ form="False"
 run_idx=0
 
 # Hyperparams
-lr=5e-4
-its=10000
+lr=8e-4
+its=15000
 layers=3
 seq_len=25
 
 # ED
-early_sigma=1000
-late_sigma=1500
+early_sigma=100
+late_sigma=150
 marked_cusp_data="None"
 # "[[255, 0, 0], [0, 255, 0], [0, 0, 255]]"
 
