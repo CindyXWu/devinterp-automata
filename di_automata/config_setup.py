@@ -498,7 +498,7 @@ class MainConfig(BaseModel):
     initialisation: InitialisationConfig = Field(default_factory=InitialisationConfig)
     optimizer_config: OptimizerConfig = Field(default_factory=OptimizerConfig)
     
-    # Model saving
+    # Model/logit saving
     model_save_method: str = Field(default="aws", description="How to save model - [local, aws, wandb]")
     aws_bucket: str = Field(default="s3://automata-devinterp-01/my_checkpoints/", description="Bucket name for AWS S3.")
     
@@ -512,6 +512,8 @@ class MainConfig(BaseModel):
     ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
     use_ema: bool = Field(default=True, description="Whether to use exponential moving average of model parameters.")
     use_scratchpad: bool = Field(default=True, description="Whether to use scratchpad training with recency bias as in Liu et al 'Transformers Learn Shortcuts to Automata' https://arxiv.org/abs/2210.10749")
+    
+    
     # Other
     num_model_save_workers: Optional[int] = Field(default=1, description="Number of workers to use for saving model checkpoints.")
     ema_decay: float = Field(default=0.9, description="Decay factor for EMA.")

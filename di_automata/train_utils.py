@@ -195,19 +195,6 @@ class Run:
         os.remove(f"logits_cp_{idx}.torch")
 
 
-    # def save_logits(self):
-    #     """Save complete ed_logits list to WandB as one file, if it exists.
-    #     Currently deprecated: logits are saved directly to WandB.
-    #     """
-    #     logit_artifact = wandb.Artifact(f"logits", type="logits", description="Logits across whole of training, stacked into matrix.")
-    #     if self.ed_logits:
-    #         torch.save(self.ed_logits, "logits")
-    #         logit_artifact.add_file("logits")
-    #     wandb.log_artifact(logit_artifact, aliases=[f"{self.config.run_name}_{self.config.time}"])
-        
-    #     if os.path.exists("logits"): os.remove("logits")
-
-
     def _save_config(self) -> None:
         """Only called once to prevent saving config multiple times."""
         model_artifact = wandb.Artifact(f"config", type="config", description="Config after run-time attributes filled in.")
@@ -235,7 +222,7 @@ class Run:
                 wandb.log_artifact(model_artifact, aliases=[f"idx{idx}_{self.config.run_name}_{self.config.time}"])
                 os.remove(f"states_{idx}.torch") # Delete file to prevent clogging up
             case "aws":
-                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}.pth', mode='wb') as file:
+                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/states_{idx}.pth', mode='wb') as file:
                     torch.save(state, file)
                 print("Saved model to AWS")
                 

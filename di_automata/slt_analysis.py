@@ -62,7 +62,7 @@ class PostRunSLT:
         self.run_name = slt_config.run_name
         
         # Get run information
-        self.api = wandb.Api(timeout=300)
+        self.api = wandb.Api(timeout=3000)
         run_list = self.api.runs(
             path=self.run_path, 
             filters={
@@ -193,9 +193,10 @@ class PostRunSLT:
         
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(self._load_logits_single_cp, cp_idx, ed_logits) for cp_idx in range(len(self.logit_artifacts))]
-            for future in futures:
+            for future in tqdm(futures):
                 future.result()  # Wait for all futures to complete
 
+        torch.save(ed_logits, Path(__file__).parent / f"logits_{self.run_name}_{self.config.time}")
         return ed_logits
 
     

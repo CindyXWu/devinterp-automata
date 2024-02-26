@@ -19,7 +19,7 @@ seq_len=25
 
 # RLCT
 chains=5
-ed_eval_f=2
+ed_eval_f=4
 rlct_lr=1e-8
 weight_decay=1e-8
 chain_len=3500
