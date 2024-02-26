@@ -41,7 +41,7 @@ rlct_config:
 
   ed_config:
     batches_per_checkpoint: 150
-    eval_frequency: 10
+    eval_frequency: 2
 
   sgld_kwargs:
     lr: 5e-8

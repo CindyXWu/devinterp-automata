@@ -20,8 +20,8 @@ layers=3
 seq_len=25
 
 # ED
-early_sigma=500
-late_sigma=500
+early_sigma=50
+late_sigma=100
 marked_cusp_data="None"
 # "[[255, 0, 0], [0, 255, 0], [0, 0, 255]]"
 
