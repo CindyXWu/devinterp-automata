@@ -18,6 +18,8 @@ import threading
 from omegaconf import OmegaConf
 
 import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
 
 from di_automata.devinterp.slt.sampler import estimate_learning_coeff_with_summary
 from di_automata.devinterp.rlct_utils import (
@@ -81,17 +83,6 @@ class PostRunSLT:
         self.steps = self.history["_step"]
         self.time = self.run_api.config["time"]
 
-        # Get artifacts from old run
-        print("Getting artifacts")
-        if self.slt_config.use_logits:
-            logit_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "logits_cp"]
-            logit_artifacts = sorted(logit_artifacts, key=extract_number)
-            self.logit_artifacts = logit_artifacts[::self.slt_config.skip_cps]
-        else:
-            state_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "states"]
-            self.state_artifacts = sorted(state_artifacts, key=extract_number)
-            
-
         # self.config: MainConfig = OmegaConf.create(self.run_api.config)
         self.config = self._get_config()
         
@@ -153,27 +144,6 @@ class PostRunSLT:
                     state_dict = torch.load(f)
         return states
 
-
-    def _restore_states_from_queue(self) -> dict:
-        """Restore model state from a checkpoint. Called once for every epoch.
-        
-        Params:
-            idx: Index in steps.
-            
-        Returns:
-            model state dictionary.
-        """
-        match self.config.model_save_method:
-            case "wandb":
-                artifact = self.state_queue.get()
-                data_dir = artifact.download()
-                model_state_path = Path(data_dir) / "states.torch"
-                states = torch.load(model_state_path)
-            case "aws":
-                with s3.open(f"{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}") as f:
-                    states = torch.load(f)
-        return states["model"]
-
     
     def _get_config(self) -> MainConfig:
         """"
@@ -186,21 +156,34 @@ class PostRunSLT:
         return OmegaConf.load(config_path)
 
 
-    def _load_logits_cp(self) -> None:
+    def _load_logits_cp(self) -> torch.Tensor:
         """Load logits from WandB for each checkpoint via multithreading.
         """
-        ed_logits = torch.empty((len(self.logit_artifacts), self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
+        logits_file_path = Path(__file__).parent / f"logits_{self.run_name}_{self.config.time}"
         
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(self._load_logits_single_cp, cp_idx, ed_logits) for cp_idx in range(len(self.logit_artifacts))]
-            for future in tqdm(futures):
-                future.result()  # Wait for all futures to complete
-
-        torch.save(ed_logits, Path(__file__).parent / f"logits_{self.run_name}_{self.config.time}")
+        if os.path.exists(logits_file_path):
+            print("Loading existing logits")
+            ed_logits = torch.load(logits_file_path)
+            print("Done loading existing logits")
+        else:
+            print("Getting artifacts")
+            logit_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "logits_cp"]
+            logit_artifacts = sorted(logit_artifacts, key=extract_number)
+            self.logit_artifacts = logit_artifacts[::self.slt_config.skip_cps]
+            
+            ed_logits = torch.empty((len(self.logit_artifacts), self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
+            
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(self._load_logits_single_cp, cp_idx, ed_logits) for cp_idx in range(len(self.logit_artifacts))]
+                for future in tqdm(futures):
+                    future.result()  # Wait for all futures to complete
+    
+            torch.save(ed_logits, logits_file_path)
+        
         return ed_logits
 
     
-    def _load_logits_single_cp(self, cp_idx: int, ed_logits: torch.Tensor):
+    def _load_logits_single_cp(self, cp_idx: int, ed_logits: torch.Tensor) -> None:
         """Load just a single cp. 
         This function is designed to be called in multithreading and is called by the above function.
         """
@@ -214,33 +197,52 @@ class PostRunSLT:
             print(f"Error fetching logits at step {idx}: {e}")
 
         
-    def _load_logits_states(self) -> list[torch.Tensor]:
+    def _load_logits_states(self) -> torch.Tensor:
         """Load checkpointed states from WandB and do forward pass to get new logits.
         Only use for out of distribution evaluations where logits saved on WandB don't suffice.
-        Uses queue, but does not multiprocess.
+        Uses multiprocess.
         """
-        ed_logits = []
+        logits_file_path = Path(__file__).parent / f"logits_{self.run_name}_{self.config.time}"
         
-        for checkpoint_idx in range(self.config.num_training_iter // self.config.rlct_config.ed_config.eval_frequency):
-            idx = checkpoint_idx * self.config.rlct_config.ed_config.eval_frequency
-            state_dict = self._restore_states_from_queue(idx)
-            self.model.load_state_dict(state_dict)
+        if os.path.exists(logits_file_path):
+            ed_logits = torch.load(logits_file_path)
+        else:
+            state_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "states"]
+            self.state_artifacts = sorted(state_artifacts, key=extract_number)
             
-            logits_epoch = []
-            with torch.no_grad():
-                for data in take_n(self.ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
-                    inputs = data["input_ids"].to(self.device)
-                    logits = self.model(inputs)
-                    # Flatten over batch, class and sequence dimension
-                    logits_epoch.append(rearrange(logits, 'b c s -> (b c s)'))
-            
-            # Concat all per-batch logits over batch dimension to form one super-batch
-            self.logits_epoch = torch.cat(logits_epoch)
-            # Append to binary file
-            append_tensor_to_file(self.logits_epoch, self.logits_path)
-            ed_logits.append(self.logits_epoch)
+            ed_logits = torch.empty((len(self.logit_artifacts), self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = [executor.submit(self._load_logits_states_single_cp, cp_idx, ed_logits, self.model, self.ed_loader) for cp_idx in range(len(self.logit_artifacts))]
+                    for future in tqdm(futures):
+                        future.result()  # Wait for all futures to complete
+        
+            torch.save(ed_logits, logits_file_path)
             
         return ed_logits
+
+
+    def _load_logits_states_single_cp(self, cp_idx: int, ed_logits: torch.Tensor, model: nn.Module, ed_loader: DataLoader) -> None:
+        """Load just a single cp state and do inference to get logits.
+        This function is designed to be called in multithreading and is called by the above function.
+        """
+        idx = cp_idx * self.config.rlct_config.ed_config.eval_frequency
+        artifact = self.state_artifacts[cp_idx]
+        data_dir = artifact.download()
+        state_path = Path(data_dir) / f"states_{idx}.torch"
+        model.load_state_dict(state_dict)
+        
+        logits_cp = []
+        with torch.no_grad():
+            for data in take_n(ed_loader, self.config.rlct_config.ed_config.batches_per_checkpoint):
+                inputs = data["input_ids"].to(self.device)
+                logits = model(inputs)
+                # Flatten over batch, class and sequence dimension
+                logits_cp.append(rearrange(logits, 'b c s -> (b c s)'))
+        
+        # Concat all per-batch logits over batch dimension to form one super-batch
+        logits_cp = torch.cat(logits_cp)
+        ed_logits[cp_idx] = logits_cp
         
     
     def _truncate_ed_logits(self, ed_logits: list[torch.Tensor]) -> None:

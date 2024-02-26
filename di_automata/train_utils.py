@@ -188,11 +188,17 @@ class Run:
     
     def _save_logits_cp(self, logits_cp: torch.Tensor, idx: int):
         """Save logits for each checkpoint."""
-        torch.save(logits_cp, f"logits_cp_{idx}.torch")
-        logit_artifact = wandb.Artifact(f"logits_cp_{idx}", type="logits_cp", description="Logits from one evaluation only.")
-        logit_artifact.add_file(f"logits_cp_{idx}.torch")
-        wandb.log_artifact(logit_artifact, aliases=[f"logits_cp_{idx}_{self.config.run_name}_{self.config.time}"])
-        os.remove(f"logits_cp_{idx}.torch")
+        match self.config.model_save_method:
+            case "wandb":
+                torch.save(logits_cp, f"logits_cp_{idx}.torch")
+                logit_artifact = wandb.Artifact(f"logits_cp_{idx}", type="logits_cp", description="Logits from one evaluation only.")
+                logit_artifact.add_file(f"logits_cp_{idx}.torch")
+                wandb.log_artifact(logit_artifact, aliases=[f"logits_cp_{idx}_{self.config.run_name}_{self.config.time}"])
+                os.remove(f"logits_cp_{idx}.torch")
+            case "aws":
+                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/logits_cp_{idx}.pth', mode='wb') as file:
+                    torch.save(logits_cp, file)
+                print(f"Saved logits idx {idx} to AWS")
 
 
     def _save_config(self) -> None:
