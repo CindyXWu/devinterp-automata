@@ -124,27 +124,6 @@ class PostRunSLT:
         """
         form_potential_plotter = FormPotentialPlotter(self.ed_logits, self.steps, self.slt_config, self.run_name)
         form_potential_plotter.plot()
-    
-    
-    def _restore_states(self, idx: int) -> dict:
-        """Restore model state from a checkpoint. Called once for every epoch.
-        
-        Params:
-            idx: Index in steps.
-            
-        Returns:
-            model state dictionary.
-        """
-        match self.config.model_save_method:
-            case "wandb":
-                artifact = self.run.use_artifact(f"{self.run_path}/states:idx{idx}_{self.run_name}_{self.config.time}")
-                data_dir = artifact.download()
-                model_state_path = Path(data_dir) / f"states_{idx}.torch"
-                state_dict = torch.load(model_state_path)
-            case "aws":
-                with s3.open(f"{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/{idx}") as f:
-                    state_dict = torch.load(f)
-        return states
 
     
     def _get_config(self) -> MainConfig:
@@ -206,7 +185,30 @@ class PostRunSLT:
         except Exception as e:
             print(f"Error fetching logits at step {idx}: {e}")
 
+    
+    def _restore_state_single_cp(self, cp_idx: int) -> dict:
+        """Restore model state from a single checkpoint.
+        Used in _load_logits_states() and _calculate_rlct().
         
+        Args:
+            idx_cp: index of checkpoint.
+            
+        Returns:
+            model state dictionary.
+        """
+        idx = cp_idx * self.config.rlct_config.ed_config.eval_frequency
+        match self.config.model_save_method:
+            case "wandb":
+                artifact = self.state_artifacts[cp_idx]
+                data_dir = artifact.download()
+                state_path = Path(data_dir) / f"states_{idx}.torch"
+                state_dict = torch.load(state_path)
+            case "aws":
+                with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/states_{idx}.pth', mode='rb') as file:
+                    state_dict = torch.load(file)
+        return state_dict
+    
+    
     def _load_logits_states(self) -> torch.Tensor:
         """Load checkpointed states from WandB and do forward pass to get new logits.
         Only use for out of distribution evaluations where logits saved on WandB don't suffice.
@@ -241,16 +243,7 @@ class PostRunSLT:
         This function is designed to be called in multithreading and is called by the above function.
         """
         try:
-            idx = cp_idx * self.config.rlct_config.ed_config.eval_frequency
-            match self.config.model_save_method:
-                case "wandb":
-                    artifact = self.state_artifacts[cp_idx]
-                    data_dir = artifact.download()
-                    state_path = Path(data_dir) / f"states_{idx}.torch"
-                    state_dict = torch.load(state_path)
-                case "aws":
-                    with s3.open(f'{self.config.aws_bucket}/{self.config.run_name}_{self.config.time}/states_{idx}.pth', mode='rb') as file:
-                        state_dict = torch.load(file)
+            state_dict = self._restore_state_single_cp(cp_idx)
             model.load_state_dict(state_dict)
             
             logits_cp = []
@@ -333,39 +326,39 @@ class PostRunSLT:
             pickle.dump(pca, f)
         
         return pca_projected_samples
-        
     
-    def calculate_rlct(self):
-        """Estimate RLCTs from a set of checkpoints after training, plot and dump graph on WandB."""
-        train_loader = create_dataloader_hf(self.config, deterministic=False)
-
-        for epoch in range(1, self.config.num_epochs): # TODO: currently epochs coincides with evaluations, but may not always be true
-            idx = epoch * self.config.eval_frequency
-            state_dict = self._restore_states(idx)
-            
-            rlct_func = partial(
-                estimate_learning_coeff_with_summary,
-                loader=train_loader,
-                criterion=self.rlct_criterion,
-                main_config=self.slt_config,
-                checkpoint=state_dict,
-                device=self.device,
-            )
-
-            results, callback_names = rlct_func(
-            sampling_method=rlct_class_map[self.slt_config.rlct_config.sampling_method], 
-            optimizer_kwargs=self.slt_config.rlct_config.sgld_kwargs
-            )
-            # TODO: check these are the right objects
-            prev_run_stats_kwargs = {"loss": self.loss_history[epoch - 1], "acc": self.accuracy_history[epoch - 1]}
-            results_filtered = extract_and_save_rlct_data(results, callback_names, sampler_type=self.slt_config.rlct_config.sampling_method.lower(), idx=idx, kwargs=prev_run_stats_kwargs)
-            self.rlct_data_list.append(results_filtered)
         
-        rlct_df = pd.DataFrame(self.rlct_data_list)
-        rlct_df.to_csv(f"rlct_{self.config.run_name}.csv")
-        rlct_artifact = wandb.Artifact(f"rlct", type="rlct", description="All RLCT data.")
-        rlct_artifact.add_file(f"rlct_{self.config.run_name}.csv")
-        wandb.log_artifact(rlct_artifact, aliases=[f"rlct_{self.config.run_name}"])
+    ## TODO: figure out how often you want to calculate RLCT and create indices to iterate over, and slice artifact list with
+    # def calculate_rlct(self):
+    #     """Estimate RLCTs from a set of checkpoints after training, plot and dump graph on WandB."""
+    #     train_loader = create_dataloader_hf(self.config, deterministic=False)
+
+    #     for epoch in range(1, self.config.num_epochs): # TODO: currently epochs coincides with evaluations, but may not always be true
+    #         state_dict = self._restore_state_single_cp(idx)
+            
+    #         rlct_func = partial(
+    #             estimate_learning_coeff_with_summary,
+    #             loader=train_loader,
+    #             criterion=self.rlct_criterion,
+    #             main_config=self.slt_config,
+    #             checkpoint=state_dict,
+    #             device=self.device,
+    #         )
+
+    #         results, callback_names = rlct_func(
+    #         sampling_method=rlct_class_map[self.slt_config.rlct_config.sampling_method], 
+    #         optimizer_kwargs=self.slt_config.rlct_config.sgld_kwargs
+    #         )
+    #         # TODO: check these are the right objects
+    #         prev_run_stats_kwargs = {"loss": self.loss_history[epoch - 1], "acc": self.accuracy_history[epoch - 1]}
+    #         results_filtered = extract_and_save_rlct_data(results, callback_names, sampler_type=self.slt_config.rlct_config.sampling_method.lower(), idx=idx, kwargs=prev_run_stats_kwargs)
+    #         self.rlct_data_list.append(results_filtered)
+        
+    #     rlct_df = pd.DataFrame(self.rlct_data_list)
+    #     rlct_df.to_csv(f"rlct_{self.config.run_name}.csv")
+    #     rlct_artifact = wandb.Artifact(f"rlct", type="rlct", description="All RLCT data.")
+    #     rlct_artifact.add_file(f"rlct_{self.config.run_name}.csv")
+    #     wandb.log_artifact(rlct_artifact, aliases=[f"rlct_{self.config.run_name}"])
     
     
     def _set_logger(self) -> None:
