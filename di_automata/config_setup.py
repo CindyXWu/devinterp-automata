@@ -111,6 +111,7 @@ class HookedTransformerConfig(BaseModel):
     n_ctx: int  = Field(default=514, description="Set by root validator based on task. For scratchpad training, if input context is N, this should be 2 * N + 2.")
     n_layers: int
     d_vocab: int  = Field(default=None, description="Set by root validator. For scratchpad training, if N is output vocab size, this should be 2 * N + 1.")
+    d_vocab_out: int = Field(default=None, description="Output vocab size for algorithmic tasks. Set by root validator.")
     act_fn: str = Field(default="relu")
     
     
@@ -569,7 +570,8 @@ class MainConfig(BaseModel):
         # Adjust HookedTransformer config based on task_config
         if v.get("tflens_config") and task_config:
             v["tflens_config"]["n_ctx"] = task_config_instance.length if not v["use_scratchpad"] else 2 * task_config_instance.length + 2
-            v["tflens_config"]["d_vocab"] = max(task_config_instance.output_vocab_size, task_config_instance.vocab_size) if not v["use_scratchpad"] else max(task_config_instance.output_vocab_size, task_config_instance.vocab_size) * 2 + 1
+            v["tflens_config"]["d_vocab"] = task_config_instance.vocab_size if not v["use_scratchpad"] else task_config_instance.vocab_size * 2
+            v["tflens_config"]["d_vocab_out"] = max(task_config_instance.output_vocab_size, task_config_instance.vocab_size) if not v["use_scratchpad"] else max(task_config_instance.output_vocab_size, task_config_instance.vocab_size) * 2 + 1
         
         # Adjust RLCT parameters
         rlct_config = v["rlct_config"]

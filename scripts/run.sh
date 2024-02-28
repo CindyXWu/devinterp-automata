@@ -4,17 +4,17 @@
 SCRIPT_PATH="run.py"
 
 task="symmetric"
-model_save="wandb"
+model_save="aws"
 
 # Whether to log particular things
 llc_train="False"
 ed_train="True"
 
 # Hyperparams
-lr=1e-4
-its=15000
+lr=5e-4
+its=25000
 eval_f=100
-layers=3
+layers=2
 seq_len=25
 
 # RLCT

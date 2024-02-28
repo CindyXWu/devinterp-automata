@@ -95,6 +95,7 @@ tflens_config:
   n_ctx: null # Will be updated automatically based on dataset
   n_layers: 3
   d_vocab: null # Will be updated automatically based on dataset
+  d_vocab_out: null # Will be updated automatically based on dataset
   act_fn: relu
 
 wandb_config:
