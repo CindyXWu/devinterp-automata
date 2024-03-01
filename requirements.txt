@@ -36,7 +36,7 @@ git+https://github.com/neelnanda-io/neel-plotly
 # jupyterlab-widgets==1.1.1
 # jupyter
 autorom[accept-rom-license]
-ale-py
+# ale-py
 protobuf==3.20.3
 imageio-ffmpeg
 

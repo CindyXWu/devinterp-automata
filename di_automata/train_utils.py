@@ -53,7 +53,8 @@ api = wandb.Api(timeout=60)
 
 class Run:
     def __init__(self, config: MainConfig):
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        # self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("mps")
 
         self.config = config
         
@@ -130,7 +131,7 @@ class Run:
                 self.progress_bar.update()
 
                 # ED logit evaluation
-                if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0:
+                if self.idx % self.config.rlct_config.ed_config.eval_frequency == 0 and self.config.ed_train:
                     # logit_future = self.logit_saver.submit(self._ed_data_training, self.model, self.ema, self.idx)
                     # logit_future.add_done_callback(task_done)
                     self._ed_data_training(self.model, self.ema, self.idx)
@@ -274,7 +275,7 @@ class Run:
         
         For this reason, train uses 10x fewer batches, since it's supposed to be stochastic.
         """
-        eval_func = partial(evaluate, model=self.model, logits_shape=logits_shape, ema=self.ema if self.config.use_ema else None)
+        eval_func = partial(evaluate, model=self.model, logits_shape=logits_shape, device=self.device, ema=self.ema if self.config.use_ema else None)
         train_acc, train_loss = eval_func(data_loader=self.train_loader, num_eval_batches=self.config.num_eval_batches // 10)
         eval_acc, eval_loss = eval_func(data_loader=self.eval_loader, num_eval_batches=self.config.num_eval_batches)
         
@@ -283,6 +284,8 @@ class Run:
         wandb.log({"Train Acc": train_acc, "Train Loss": train_loss, "Eval Acc": eval_acc, "Eval Loss": eval_loss, "LR": self.scheduler.get_lr()}, step=self.idx)
         
         return train_acc, train_loss, eval_acc, eval_loss
+    
+
     def _set_logger(self) -> None:
         """Currently uses WandB as default."""
         logging.info(f"Hydra current working directory: {os.getcwd()}")
@@ -345,8 +348,8 @@ def evaluate(
     data_loader: DataLoader,
     num_eval_batches: int,
     logits_shape: tuple[int, int, int],
+    device: torch.device,
     ema: Optional[ExponentialMovingAverage] = None,
-    device: torch.device = torch.device("cuda"),
 ) -> Tuple[float, float]:
     """"
     Evaluate, wrapping in EMA context if EMA is used.
