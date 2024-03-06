@@ -49,6 +49,7 @@ pytest
 plotly
 tqdm
 wandb
+python-dotenv
 argparse
 pyYAML
 tqdm

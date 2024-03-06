@@ -6,7 +6,8 @@ dataset_type: 'dihedral'
 
 llc: false
 ed: true
-form: false
+form: true
+osculating: true
 use_logits: true
 
 run_idx: 0
@@ -22,6 +23,7 @@ truncate_its: null # Set to null if you want to automatically truncate using abo
 skip_cps: 2
 
 n_layers: 3
+n_heads: 3
 seq_len: 25
 
 rlct_config:
@@ -62,7 +64,7 @@ ed_plot_config:
   num_pca_components: 3
   plot_caustic: true
   figsize: [20, 6]
-  marked_cusp_data: null
+  marked_cusp_data: [{'step': 220, 'influence_start': 190, 'influence_end': 240}, {'step': 630, 'influence_start': 610, 'influence_end': 650}]
   use_cache: false
   num_sharp_points: 10
   num_vertices: 30

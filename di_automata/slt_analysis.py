@@ -15,6 +15,7 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from dotenv.main import load_dotenv
 from omegaconf import OmegaConf
 
 import torch
@@ -39,7 +40,9 @@ from di_automata.devinterp.ed_utils import EssentialDynamicsPlotter, FormPotenti
 Sweep = TypeVar("Sweep")
 
 # AWS
-s3 = s3fs.S3FileSystem()
+load_dotenv()
+aws_key, aws_secret = os.getenv("AWS_KEY"), os.getenv("AWS_SECRET")
+s3 = s3fs.S3FileSystem(key=aws_key, secret=aws_secret)
 
 PATTERN = re.compile(r"logits_cp_(\d+):v")
 
@@ -102,6 +105,7 @@ class PostRunSLT:
         self.rlct_criterion = construct_rlct_criterion(self.config)
         self.logits_file_path = Path(__file__).parent / f"logits_{self.config.run_name}_{self.config.time}"
         self.num_cps_to_analyse = self.config.num_training_iter // (self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps)
+        self.ed_logits = None
 
     
     def do_ed(self):
@@ -114,14 +118,19 @@ class PostRunSLT:
         ed_projected_samples = self._ed_calculation(ed_logits)
 
         # Create and call instance of essential dynamics osculating circle plotter
-        ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, self.steps, self.slt_config.ed_plot_config, self.run_name)
-        wandb.log({"ed_osculating": wandb.Image("ed_osculating_circles.png")})
+        if self.slt_config.osculating:
+            ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, self.steps, self.slt_config.ed_plot_config, self.run_name)
+            wandb.log({"ed_osculating": wandb.Image("ed_osculating_circles.png")})
     
     
     def plot_form_potential(self):
         """After analysing initial osculating circle plot, choose marked cusp data points.
         Use these to plot a form potential plot over time steps.
+
+        Should always be run after ed logit calculation for now.
         """
+        if not self.ed_logits: # Sometimes this code block comes after ed, so logits already loaded
+            self.ed_logits = self._load_logits_cp() if self.slt_config.use_logits else self._load_logits_states()
         form_potential_plotter = FormPotentialPlotter(self.ed_logits, self.steps, self.slt_config, self.run_name)
         form_potential_plotter.plot()
 
@@ -222,7 +231,7 @@ class PostRunSLT:
 
             if self.config.model_save_method == "wandb":
                 print("Getting WandB artifacts")
-                state_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "states"]
+                state_artifacts = [x for x in sel== f.run_api.logged_artifacts() if x.type == "states"]
                 self.state_artifacts = sorted(state_artifacts, key=extract_number)
             else:
                 print("Getting AWS checkpoints")
@@ -298,6 +307,7 @@ class PostRunSLT:
         Diplay top 3 components against each other and show fraction variance explained.
         Save projected PCA samples and PCA object in separate files for later plotting.
         """
+        print("doing ed calculation")
         pca = PCA(n_components=3)
         pca.fit(ed_logits.cpu().numpy())
         
@@ -311,19 +321,17 @@ class PostRunSLT:
         
         plot_pca_plotly(pca_projected_samples[:,0], pca_projected_samples[:,1], pca_projected_samples[:,2], self.config)
         plot_explained_var(explained_variance)
+
         
+        pca_samples_file_path = Path(__file__).parent / f"pca_projected_samples_{self.config.run_name}_{self.time}"
+        torch.save(pca_projected_samples, pca_samples_file_path)
+        pca_file_path = Path(__file__).parent / f"pca_{self.config.run_name}_{self.time}"
+        torch.save(pca, pca_file_path)
+
         wandb.log({
             "ED_PCA_truncated": wandb.Image("PCA.png"),
             "explained_var_truncated": wandb.Image("pca_explained_var.png"),
         })
-        
-        pca_samples_file_path = f"pca_projected_samples_{self.config.run_name}.pkl"
-        with open(pca_samples_file_path, 'wb') as f:
-            pickle.dump(pca_projected_samples, f)
-            
-        pca_file_path = f"pca_{self.config.run_name}.pkl"
-        with open(pca_file_path, 'wb') as f:
-            pickle.dump(pca, f)
         
         return pca_projected_samples
     

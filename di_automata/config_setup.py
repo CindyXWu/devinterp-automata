@@ -473,7 +473,7 @@ class EDPlotConfig(BaseModel):
     num_pca_components: int = 3
     plot_caustic: bool = True
     figsize: Tuple[int, int] = (20, 6)
-    marked_cusp_data: Optional[dict[str, Union[float, int]]] = Field(default=None, description="Key: ['step','influence_start','influence_end'], values are floats defining these. Not important for plotting, but seems to mark cusps.")
+    marked_cusp_data: Optional[list[dict[str,int]]] = Field(default=None, description="Key: ['step','influence_start','influence_end'], values are ints defining these. Not important for plotting, but seems to mark cusps.")
     use_cache: bool = False
     num_sharp_points: int = 20
     num_vertices: int = 35
@@ -513,7 +513,6 @@ class MainConfig(BaseModel):
     ed_train: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT.")
     use_ema: bool = Field(default=True, description="Whether to use exponential moving average of model parameters.")
     use_scratchpad: bool = Field(default=True, description="Whether to use scratchpad training with recency bias as in Liu et al 'Transformers Learn Shortcuts to Automata' https://arxiv.org/abs/2210.10749")
-    
     
     # Other
     num_model_save_workers: Optional[int] = Field(default=1, description="Number of workers to use for saving model checkpoints.")
@@ -603,6 +602,7 @@ class PostRunSLTConfig(BaseModel):
     lr: float
     num_training_iter: int
     n_layers: int
+    n_heads: int
     seq_len: int
     truncate_its: Optional[int] = Field(default=None, description="Truncate training iterations to this number.")
     
@@ -615,6 +615,7 @@ class PostRunSLTConfig(BaseModel):
     ## Flags
     llc: bool = Field(default=False, description="Whether to calculate RLCT/local learning coefficient/lambda hat metric from SLT from checkpoints outside of training.")
     ed: bool = Field(default=True, description="Whether to calculate essential dynamics (logit PCA) metric from SLT from checkpoints outside of training.")
+    osculating: bool = Field(default=True, description="Whether to make osculating circle plots.")
     form: bool = Field(default=False, description="Whether to plot form potential over time. Requires marked_cusp_data to be not None in EDPlotConfig.")
     use_logits: bool = Field(default=True, description="Whether to load logits directly for ED calculations.")
     save_logits_cp: bool = Field(default=True, description="Save logits from each checkpoint directly to WandB at ED frequency. Used because we save the model checkpoints less frequently (for now).")
@@ -632,8 +633,8 @@ class PostRunSLTConfig(BaseModel):
         config_class = config_class_map[task_config["dataset_type"]]
         
         ## For new run names
+        # v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_heads{v['n_heads']}seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_sigmastart{v['ed_plot_config']['smoothing_sigma_early']}_sigmalate{v['ed_plot_config']['smoothing_sigma_late']}"
         v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}_nstates{task_config.get('n', None)}_prob1{task_config.get('prob1', None)}_nactions{task_config.get('n_actions', None)}"
-        # v["run_name"] = f"{v['task_config']['dataset_type']}_{v['model_type']}_LR{v['lr']}_its{v['num_training_iter']}_layers{v['n_layers']}_seqlen{v['seq_len']}"
 
         # Adjust RLCT parameters
         rlct_config = v["rlct_config"]

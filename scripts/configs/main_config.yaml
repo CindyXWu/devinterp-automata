@@ -90,7 +90,7 @@ nano_gpt_config:
 tflens_config:
   d_model: 256
   d_head: 64
-  n_heads: 4 # Will be updated automatically based on dataset
+  n_heads: 4
   d_mlp: 1024
   n_ctx: null # Will be updated automatically based on dataset
   n_layers: 3

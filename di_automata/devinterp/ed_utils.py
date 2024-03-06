@@ -1,12 +1,12 @@
 from typing import Union, List, Tuple
 import os
-from dotenv import load_dotenv
 import logging
 from pathlib import Path
 import numpy as np
 import itertools
 import pickle
 import scipy.ndimage
+import torch
 import matplotlib.pyplot as plt
 import matplotlib.font_manager
 import seaborn as sns
@@ -14,7 +14,6 @@ import seaborn as sns
 from di_automata.config_setup import *
 
 logging.basicConfig(level=logging.INFO)
-load_dotenv();
 
 # Plotting globals
 sns.set_style("ticks")
@@ -108,7 +107,7 @@ class EssentialDynamicsPlotter:
         self.PLOT_RANGE = range(self.CUTOFF_START, len(self.samples) - self.CUTOFF_END, self.OSCULATE_SKIP)
 
         # Make folder which belongs to particular run name
-        self.ed_folder_path = Path(__file__).parent / f"{self.config.ed_folder}/{self.run_name}"
+        self.ed_folder_path = Path(__file__).parent / Path(f"{self.config.ed_folder}/{self.run_name}")
         self.ed_folder_path.mkdir(parents=True, exist_ok=True)
         
         self.I = 0
@@ -129,7 +128,7 @@ class EssentialDynamicsPlotter:
         self.smoothed_pcs = []
         
         for i in range(self.config.num_pca_components):
-            file_path_smoothing = self.ed_folder_path / 'smoothed_principle_component_{i}.pkl'
+            file_path_smoothing = self.ed_folder_path / f'smoothed_pc_{i}.pkl'
             
             if self.config.use_cache and os.path.exists(file_path_smoothing):
                 with open(file_path_smoothing, 'rb') as file:
@@ -177,12 +176,13 @@ class EssentialDynamicsPlotter:
             self.smoothed_samples = np.column_stack((smoothed_pc_i, smoothed_pc_j))
             
             # Load osculating data
-            file_path_osculating = self.ed_folder_path / f'osculating_data_i{i}_j{j}.pkl'
+            file_path_osculating = Path(__file__).parent / f"{self.config.ed_folder}/{self.run_name}"/f'osculating_i{i}_j{j}.pkl'
             if self.config.use_cache and os.path.exists(file_path_osculating):
                 print("Using cached osculate data")
                 with open(file_path_osculating, 'rb') as file:
                     osculating_data = pickle.load(file)
             else:
+                print("Calculating osculating circles")
                 osculating_data: dict[str, tuple[float, float]] = {}
 
                 for t_idx in range(self.CUTOFF_START, len(self.samples) - self.CUTOFF_END, 1):
@@ -245,6 +245,7 @@ class EssentialDynamicsPlotter:
         
     def _draw_phases(self, i: int, j: int):
         """Colour each phase on the ED plot with a different line."""
+        print("Marking phases")
         # If we want to plot phases as separate sections
         if self.config.transitions:
             for k, (start, end, stage) in enumerate(self.config.transitions):
@@ -258,6 +259,7 @@ class EssentialDynamicsPlotter:
                     lw = 2
                 )
         else:
+            # Plot all the points as a scruffy blue line
             self.axes[self.I].plot(self.samples[:, i], self.samples[:, j])
 
         # Look for points where distance between neighbouring centres is small i.e. curve is relatively tight
@@ -310,7 +312,7 @@ class EssentialDynamicsPlotter:
                     s=40
                 )
 
-                if self.show_vertex_influence:
+                if self.config.show_vertex_influence:
                     vertex_influence_start = self.marked_cusp_data[marked_cusp_id]["influence_start"]
                     vertex_influence_end = self.marked_cusp_data[marked_cusp_id]["influence_end"]         
                     self.axes[self.I].scatter(
@@ -331,7 +333,6 @@ class EssentialDynamicsPlotter:
 
     def _finish_plot(self):
         labels = [""]
-        self.axes[0].set_ylabel(f"{labels[0]}\n\nPC 1")
         plt.tight_layout(rect=[0, 0, 1, 1])
 
         if self.config.transitions:
@@ -391,6 +392,7 @@ class FormPotentialPlotter:
         self.pc_pairs = [[0,1], [0,2], [1,2]]
         
         self._set_matplotlib()
+        print("done initialising form potential plotter")
         
         
     def _set_matplotlib(self) -> None:
@@ -400,13 +402,18 @@ class FormPotentialPlotter:
     
     
     def plot(self):
+        print("plotting in form potential function")
         cusp_functions = []
         alpha = 1 # Index of form
         
-        with open (f"pca_{self.slt_config.run_name}", "rb") as file:
-            pca = pickle.load(file)
+        pca_file_path = Path(__file__).parent / f"pca_{self.slt_config.run_name}"
+        if os.path.exists(pca_file_path):
+            pca = torch.load(pca_file_path)
+        else:
+            print("No pca found")
             
         for cusp in self.marked_cusp_data:
+            # Unpack cusp
             cusp_index = cusp["step"]
             influence_start = cusp["influence_start"]
             influence_end = cusp["influence_end"]
@@ -418,12 +425,13 @@ class FormPotentialPlotter:
             center_list = []
             
             for i, j in self.pc_pairs:
-                file_path_smoothings = f'smoothed_samples_i{i}_j{j}.pkl'
+                # file_path_smoothing_1 = f'smoothed_pc_{i}.pkl'
+                # file_path_smoothing_2 = f'smoothed_pc_{i}.pkl'
+                # assert os.path.exists(file_path_smoothings), "No smoothing stored on disk"        
+                # with open(file_path_smoothings, 'rb') as file:
+                #     smoothed_samples = pickle.load(file)
+                
                 file_path_osculating = f'osculating_data_i{i}_j{j}.pkl'
-                assert os.path.exists(file_path_smoothings), "No smoothing stored on disk"        
-                with open(file_path_smoothings, 'rb') as file:
-                    smoothed_samples = pickle.load(file)
-
                 assert os.path.exists(file_path_osculating), "No osculating data stored to disk"
                 with open(file_path_osculating, 'rb') as file:
                     osculating_data = pickle.load(file)
@@ -431,32 +439,31 @@ class FormPotentialPlotter:
                 center, radius = osculating_data[cusp_index]
                 center_list.append(center)
 
-            # center_list[0] = [pc1, pc2]
-            coeff_pc1 = center_list[0][0]
+            # Want center_list[0] = [pc1, pc2]
+            coeff_pc1 = center_list[0][0] = center_list[1,0]
             coeff_pc2 = center_list[0][1]
-
-            # center_list[1] = [pc1, pc3]
+            # Want center_list[1] = [pc1, pc3]
             coeff_pc3 = center_list[1][1]
             
             # pca_vectors[t,:] is the (t+1)st principal component
             pca_vectors = pca.components_
             
+            # Get cusp functions
             if self.config.num_pca_components == 3:
                 f_cusp = pca_vectors[0,:] * coeff_pc1 + pca_vectors[1,:] * coeff_pc2 + pca_vectors[2,:] * coeff_pc3
                 f_cusp_top = np.array([coeff_pc1, coeff_pc2, coeff_pc3])
-
-            cusp_functions.append(f_cusp)       
+            cusp_functions.append(f_cusp)
+            f_cusp_file_path = Path(__file__).parent / f"{self.run_name}/forms"
+            with open(f_cusp_file_path, 'wb') as f:
+                pickle.dump(f, f_cusp_file_path)
 
             # Project back for a sanity check
             I = 0
-            for first_pc, second_pc in self.pc_pairs:
-                j = first_pc - 1
-                i = second_pc - 1
-                
+            for i, j in self.pc_pairs:
                 components_to_use = [i,j]
                 selected_components = pca.components_[components_to_use]
                 f_projected = f_cusp.dot(selected_components.T)
-                print(f"Norm distance for pair [{first_pc},{second_pc}] is {np.linalg.norm(f_projected - center_list[I])}")
+                print(f"Norm distance for pair [{i},{j}] is {np.linalg.norm(f_projected - center_list[I])}")
                 I += 1
                     
             distances = np.linalg.norm(self.samples[sample_indices,:self.config.num_pca_components] - f_cusp_top,axis=1)
