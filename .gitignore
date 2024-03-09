@@ -13,7 +13,9 @@
 **/rlct_data/
 **/artifacts/
 
-# Files
+# Files and data
 **/minf-dan.ipynb
 **/.env
-**/logits_dihedral_*
+**/logits/*
+**/ed_data/*
+**/forms/*

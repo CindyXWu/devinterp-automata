@@ -103,8 +103,8 @@ class PostRunSLT:
         # SLT stuff
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_criterion = construct_rlct_criterion(self.config)
-        self.logits_file_path = Path(__file__).parent / f"logits_{self.config.run_name}_{self.config.time}"
-        self.num_cps_to_analyse = self.config.num_training_iter // (self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps)
+        self.logits_file_path = Path(__file__).parent / f"logits/{self.config.run_name}_{self.config.time}"
+        self.num_cps_to_analyse = self.steps.iloc[-1] // (self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps)
         self.ed_logits = None
 
     
@@ -114,12 +114,13 @@ class PostRunSLT:
 
         # Choose whether to use logits directly from WandB run or do another inference pass on model states
         ed_logits = self._load_logits_cp() if self.slt_config.use_logits else self._load_logits_states()
-        ed_logits: list[torch.Tensor] = self._truncate_ed_logits(ed_logits)
-        ed_projected_samples = self._ed_calculation(ed_logits)
+        self.ed_logits: list[torch.Tensor] = self._truncate_ed_logits(ed_logits)
+        ed_projected_samples = self._ed_calculation(self.ed_logits)
 
         # Create and call instance of essential dynamics osculating circle plotter
         if self.slt_config.osculating:
-            ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, self.steps, self.slt_config.ed_plot_config, self.run_name)
+            steps = np.arange(0, self.ed_logits.shape[0])
+            ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, steps=steps, ed_plot_config=self.slt_config.ed_plot_config, run_name=self.run_name)
             wandb.log({"ed_osculating": wandb.Image("ed_osculating_circles.png")})
     
     
@@ -129,9 +130,14 @@ class PostRunSLT:
 
         Should always be run after ed logit calculation for now.
         """
-        if not self.ed_logits: # Sometimes this code block comes after ed, so logits already loaded
+        if self.ed_logits is None: # Sometimes this code block comes after ed, so logits already loaded
             self.ed_logits = self._load_logits_cp() if self.slt_config.use_logits else self._load_logits_states()
-        form_potential_plotter = FormPotentialPlotter(self.ed_logits, self.steps, self.slt_config, self.run_name)
+        form_potential_plotter = FormPotentialPlotter(
+            samples=self.ed_logits,
+            steps=self.steps, 
+            slt_config=self.slt_config,
+            time=self.time,
+        )
         form_potential_plotter.plot()
 
     
@@ -231,7 +237,7 @@ class PostRunSLT:
 
             if self.config.model_save_method == "wandb":
                 print("Getting WandB artifacts")
-                state_artifacts = [x for x in sel== f.run_api.logged_artifacts() if x.type == "states"]
+                state_artifacts = [x for x in self.run_api.logged_artifacts() if x.type == "states"]
                 self.state_artifacts = sorted(state_artifacts, key=extract_number)
             else:
                 print("Getting AWS checkpoints")
@@ -280,7 +286,7 @@ class PostRunSLT:
             total_its = len(self.loss_history) * self.config.eval_frequency
             ed_logit_cutoff_idx = len(ed_logits) * self.slt_config.truncate_its // total_its
             ed_logits = ed_logits[:ed_logit_cutoff_idx]
-            return
+            return ed_logits
         
         # Automatically calculate cutoff index using early-stop patience
         log_loss_values = np.log(self.loss_history.to_numpy())
@@ -323,9 +329,9 @@ class PostRunSLT:
         plot_explained_var(explained_variance)
 
         
-        pca_samples_file_path = Path(__file__).parent / f"pca_projected_samples_{self.config.run_name}_{self.time}"
+        pca_samples_file_path = Path(__file__).parent / f"ed_data/pca_projected_samples_{self.config.run_name}_{self.time}"
         torch.save(pca_projected_samples, pca_samples_file_path)
-        pca_file_path = Path(__file__).parent / f"pca_{self.config.run_name}_{self.time}"
+        pca_file_path = Path(__file__).parent / f"ed_data/pca_{self.config.run_name}_{self.time}"
         torch.save(pca, pca_file_path)
 
         wandb.log({

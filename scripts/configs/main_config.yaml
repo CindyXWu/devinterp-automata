@@ -17,7 +17,7 @@ num_training_iter: 15000
 eval_frequency: 100 # If not specified then use length of dataset (dataloader length)
 ema_decay: 0.9
 num_eval_batches: 100
-early_stop_patience: 20
+early_stop_patience: 50
 early_stop_acc_threshold: 99.9
 num_model_save_workers: 50
 

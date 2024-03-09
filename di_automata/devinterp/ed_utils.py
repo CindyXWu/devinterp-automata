@@ -1,4 +1,4 @@
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, TypeVar
 import os
 import logging
 from pathlib import Path
@@ -12,6 +12,12 @@ import matplotlib.font_manager
 import seaborn as sns
 
 from di_automata.config_setup import *
+
+# Typing
+T = TypeVar("T", bound=np.generic, covariant=True)
+Vector = np.ndarray[Tuple[int], np.dtype[T]]
+Matrix = np.ndarray[Tuple[int, int], np.dtype[T]]
+Tensor = np.ndarray[Tuple[int, ...], np.dtype[T]]
 
 logging.basicConfig(level=logging.INFO)
 
@@ -107,7 +113,7 @@ class EssentialDynamicsPlotter:
         self.PLOT_RANGE = range(self.CUTOFF_START, len(self.samples) - self.CUTOFF_END, self.OSCULATE_SKIP)
 
         # Make folder which belongs to particular run name
-        self.ed_folder_path = Path(__file__).parent / Path(f"{self.config.ed_folder}/{self.run_name}")
+        self.ed_folder_path = Path(__file__).parent.parent / Path(f"{self.config.ed_folder}/{self.run_name}")
         self.ed_folder_path.mkdir(parents=True, exist_ok=True)
         
         self.I = 0
@@ -125,7 +131,7 @@ class EssentialDynamicsPlotter:
         """Create and update self.smoothed_pcs: list of np.ndarray coordinates.
         Save to file via pickle.
         """
-        self.smoothed_pcs = []
+        self.smoothed_pcs: list[Vector] = []
         
         for i in range(self.config.num_pca_components):
             file_path_smoothing = self.ed_folder_path / f'smoothed_pc_{i}.pkl'
@@ -176,7 +182,7 @@ class EssentialDynamicsPlotter:
             self.smoothed_samples = np.column_stack((smoothed_pc_i, smoothed_pc_j))
             
             # Load osculating data
-            file_path_osculating = Path(__file__).parent / f"{self.config.ed_folder}/{self.run_name}"/f'osculating_i{i}_j{j}.pkl'
+            file_path_osculating = Path(__file__).parent.parent / f"{self.config.ed_folder}/{self.run_name}"/f'osculating_i{i}_j{j}.pkl'
             if self.config.use_cache and os.path.exists(file_path_osculating):
                 print("Using cached osculate data")
                 with open(file_path_osculating, 'rb') as file:
@@ -244,7 +250,9 @@ class EssentialDynamicsPlotter:
         
         
     def _draw_phases(self, i: int, j: int):
-        """Colour each phase on the ED plot with a different line."""
+        """Colour each phase on the ED plot with a different line. 
+        Should be called inside a loop for i,j and with a particular self.I state.
+        """
         print("Marking phases")
         # If we want to plot phases as separate sections
         if self.config.transitions:
@@ -260,7 +268,10 @@ class EssentialDynamicsPlotter:
                 )
         else:
             # Plot all the points as a scruffy blue line
-            self.axes[self.I].plot(self.samples[:, i], self.samples[:, j])
+            # self.axes[self.I].plot(self.samples[:, i], self.samples[:, j], linewidth=0.5)
+            # Nicer version: smoothed samples
+            self.axes[self.I].plot(self.smoothed_samples[:, 0], self.smoothed_samples[:, 1])
+            pass
 
         # Look for points where distance between neighbouring centres is small i.e. curve is relatively tight
         for t_idx in self.PLOT_RANGE:
@@ -362,14 +373,14 @@ class EssentialDynamicsPlotter:
     
     
 class FormPotentialPlotter:
-    """Take identified 
+    """Take identified cusps and plot.
     """
     def __init__(
         self,
         samples: np.ndarray,
         steps: np.ndarray,
         slt_config: PostRunSLTConfig,
-        run_name: str,
+        time: str,
     ):
         """"
         This function requires marked cusp data to be present. It should be called after the initial osculating circle plot has been examined.
@@ -382,7 +393,7 @@ class FormPotentialPlotter:
         self.steps = steps
         self.slt_config = slt_config
         self.config = slt_config.ed_plot_config
-        self.run_name = run_name
+        self.time = time
         self.marked_cusp_data = self.config.marked_cusp_data
 
         self.alpha = 1
@@ -393,6 +404,11 @@ class FormPotentialPlotter:
         
         self._set_matplotlib()
         print("done initialising form potential plotter")
+
+        # Various folders
+        self.ed_folder_path = Path(__file__).parent.parent / f"ed_data/{self.slt_config.run_name}"
+        self.pca_file_path = Path(__file__).parent.parent / f"ed_data/pca_{self.slt_config.run_name}_{self.time}"
+        self.f_cusp_file_path = Path(__file__).parent.parent / f"forms/{self.slt_config.run_name}"
         
         
     def _set_matplotlib(self) -> None:
@@ -406,18 +422,17 @@ class FormPotentialPlotter:
         cusp_functions = []
         alpha = 1 # Index of form
         
-        pca_file_path = Path(__file__).parent / f"pca_{self.slt_config.run_name}"
-        if os.path.exists(pca_file_path):
-            pca = torch.load(pca_file_path)
+        if os.path.exists(self.pca_file_path):
+            pca = torch.load(self.pca_file_path)
         else:
-            print("No pca found")
+            print(f"No pca found at {self.pca_file_path}")
             
         for cusp in self.marked_cusp_data:
             # Unpack cusp
             cusp_index = cusp["step"]
             influence_start = cusp["influence_start"]
             influence_end = cusp["influence_end"]
-            sample_indices = np.arange(int(influence_start * 0.6), int(influence_end * 1.4))
+            sample_indices = np.arange(int(influence_start * 0.6), min(int(influence_end * 1.5), 1249))
             # sample_indices = np.arange(1, len(self.samples))
         
             print(f'Processing cusp at {cusp_index}')
@@ -431,8 +446,8 @@ class FormPotentialPlotter:
                 # with open(file_path_smoothings, 'rb') as file:
                 #     smoothed_samples = pickle.load(file)
                 
-                file_path_osculating = f'osculating_data_i{i}_j{j}.pkl'
-                assert os.path.exists(file_path_osculating), "No osculating data stored to disk"
+                file_path_osculating = self.ed_folder_path / f'osculating_i{i}_j{j}.pkl'
+                assert os.path.exists(file_path_osculating), f"No osculating data stored to disk at {file_path_osculating}"
                 with open(file_path_osculating, 'rb') as file:
                     osculating_data = pickle.load(file)
 
@@ -440,7 +455,7 @@ class FormPotentialPlotter:
                 center_list.append(center)
 
             # Want center_list[0] = [pc1, pc2]
-            coeff_pc1 = center_list[0][0] = center_list[1,0]
+            coeff_pc1 = center_list[0][0] = center_list[1][0]
             coeff_pc2 = center_list[0][1]
             # Want center_list[1] = [pc1, pc3]
             coeff_pc3 = center_list[1][1]
@@ -453,9 +468,10 @@ class FormPotentialPlotter:
                 f_cusp = pca_vectors[0,:] * coeff_pc1 + pca_vectors[1,:] * coeff_pc2 + pca_vectors[2,:] * coeff_pc3
                 f_cusp_top = np.array([coeff_pc1, coeff_pc2, coeff_pc3])
             cusp_functions.append(f_cusp)
-            f_cusp_file_path = Path(__file__).parent / f"{self.run_name}/forms"
-            with open(f_cusp_file_path, 'wb') as f:
-                pickle.dump(f, f_cusp_file_path)
+
+            # SAVE FORM LOGITS - VERY IMPORTANT
+            with open(self.f_cusp_file_path, 'wb') as f:
+                pickle.dump(f_cusp_top, f)
 
             # Project back for a sanity check
             I = 0

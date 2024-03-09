@@ -14,6 +14,7 @@ from einops import rearrange
 import s3fs
 import pandas as pd
 import math
+from dotenv import load_dotenv
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,14 +48,18 @@ Sweep = TypeVar("Sweep")
 PROJECT_ROOT = Path(__file__).parent.parent
 
 # AWS S3 bucket
-s3 = s3fs.S3FileSystem()
-api = wandb.Api(timeout=60)
-
+load_dotenv()
+aws_key, aws_secret = os.getenv("AWS_KEY"), os.getenv("AWS_SECRET")
+s3 = s3fs.S3FileSystem(key=aws_key, secret=aws_secret)
 
 class Run:
     def __init__(self, config: MainConfig):
-        # self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.device = torch.device("mps")
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda:0")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = "cpu"
 
         self.config = config
         

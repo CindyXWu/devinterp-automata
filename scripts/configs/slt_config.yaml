@@ -16,7 +16,7 @@ entity_name: wu-cindyx
 
 lr: 1e-4
 num_training_iter: 15000
-early_stop_patience: 10
+early_stop_patience: 5
 early_stop_smoothing_window: 5
 early_stop_acc_threshold: 99.9
 truncate_its: null # Set to null if you want to automatically truncate using above settings
@@ -59,18 +59,34 @@ rlct_config:
   rlct_data_dir: null
 
 ed_plot_config:
-  transitions: null
+  transitions: 
+    null
+    # Example (note Dan uses raw steps but I use checkpoint values (?)):
+    # [
+    #   (0, 800, 'L1'),
+    #   (800, 6500, 'L2'),
+    #   (6500, 8500, 'L3'),
+    #   (8500, 17000, 'L4'),
+    #   (17000, 30000, 'L5'),
+    # ]
+
   colors: null  # Example: [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
   num_pca_components: 3
   plot_caustic: true
   figsize: [20, 6]
-  marked_cusp_data: [{'step': 220, 'influence_start': 190, 'influence_end': 240}, {'step': 630, 'influence_start': 610, 'influence_end': 650}]
+  marked_cusp_data: 
+    [
+    {'step': 220, 'influence_start': 210, 'influence_end': 230},
+    {'step': 520, 'influence_start': 520, 'influence_end': 590},
+    {'step': 855, 'influence_start': 837, 'influence_end': 864},
+    {'step': 1150, 'influence_start': 1026, 'influence_end': 1150},
+  ]
   use_cache: false
   num_sharp_points: 10
   num_vertices: 30
-  osculate_start: 1
+  osculate_start: 0
   osculate_end_offset: 0
-  osculate_skip: 10
+  osculate_skip: 3
   smoothing_sigma_early: 100
   smoothing_sigma_late: 100
   smoothing_late_boundary: 100
