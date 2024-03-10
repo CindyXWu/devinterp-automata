@@ -93,13 +93,13 @@ class EssentialDynamicsPlotter:
         Args:
             samples: numpy array [n_samples, n_principle_features].
             steps: numpy array.
-            ed_plot_config: OmegaConf object with same structure as EDPlotConfig.
+            ed_plot_config: OmegaConf object with same structure as EDPlotConfig. 
+            run_name: run name with time attached to end. Only used for specifying correct data saving folder.
         """
         self.config = ed_plot_config
         self.samples = samples
         print("Number of samples: " + str(len(samples)))
         self.steps = steps
-        self.run_name = run_name
         
         ## Set constants
         # Start and end points for linear interpolation used for smoothing
@@ -113,7 +113,7 @@ class EssentialDynamicsPlotter:
         self.PLOT_RANGE = range(self.CUTOFF_START, len(self.samples) - self.CUTOFF_END, self.OSCULATE_SKIP)
 
         # Make folder which belongs to particular run name
-        self.ed_folder_path = Path(__file__).parent.parent / Path(f"{self.config.ed_folder}/{self.run_name}")
+        self.ed_folder_path = Path(__file__).parent.parent / Path(f"{self.config.ed_folder}/{run_name}")
         self.ed_folder_path.mkdir(parents=True, exist_ok=True)
         
         self.I = 0
@@ -182,7 +182,7 @@ class EssentialDynamicsPlotter:
             self.smoothed_samples = np.column_stack((smoothed_pc_i, smoothed_pc_j))
             
             # Load osculating data
-            file_path_osculating = Path(__file__).parent.parent / f"{self.config.ed_folder}/{self.run_name}"/f'osculating_i{i}_j{j}.pkl'
+            file_path_osculating = self.ed_folder_path / f'osculating_i{i}_j{j}.pkl'
             if self.config.use_cache and os.path.exists(file_path_osculating):
                 print("Using cached osculate data")
                 with open(file_path_osculating, 'rb') as file:
@@ -406,9 +406,13 @@ class FormPotentialPlotter:
         print("done initialising form potential plotter")
 
         # Various folders
-        self.ed_folder_path = Path(__file__).parent.parent / f"ed_data/{self.slt_config.run_name}"
-        self.pca_file_path = Path(__file__).parent.parent / f"ed_data/pca_{self.slt_config.run_name}_{self.time}"
-        self.f_cusp_file_path = Path(__file__).parent.parent / f"forms/{self.slt_config.run_name}"
+        self.ed_folder_path = Path(__file__).parent.parent / f"ed_data/{self.slt_config.run_name}_{time}"
+        self.ed_folder_path.mkdir(parents=True, exist_ok=True)
+        self.pca_file_path = self.ed_folder_path / f"pca"
+
+        self.form_folder_path = self.ed_folder_path / "forms"
+        self.form_folder_path.mkdir(parents=True, exist_ok=True)
+        self.plot_file_path = self.form_folder_path / "form_potential.png"
         
         
     def _set_matplotlib(self) -> None:
@@ -440,12 +444,6 @@ class FormPotentialPlotter:
             center_list = []
             
             for i, j in self.pc_pairs:
-                # file_path_smoothing_1 = f'smoothed_pc_{i}.pkl'
-                # file_path_smoothing_2 = f'smoothed_pc_{i}.pkl'
-                # assert os.path.exists(file_path_smoothings), "No smoothing stored on disk"        
-                # with open(file_path_smoothings, 'rb') as file:
-                #     smoothed_samples = pickle.load(file)
-                
                 file_path_osculating = self.ed_folder_path / f'osculating_i{i}_j{j}.pkl'
                 assert os.path.exists(file_path_osculating), f"No osculating data stored to disk at {file_path_osculating}"
                 with open(file_path_osculating, 'rb') as file:
@@ -469,8 +467,9 @@ class FormPotentialPlotter:
                 f_cusp_top = np.array([coeff_pc1, coeff_pc2, coeff_pc3])
             cusp_functions.append(f_cusp)
 
+            self.form_file_path = self.form_folder_path / f"form_{cusp_index}"
             # SAVE FORM LOGITS - VERY IMPORTANT
-            with open(self.f_cusp_file_path, 'wb') as f:
+            with open(self.form_file_path, 'wb') as f:
                 pickle.dump(f_cusp_top, f)
 
             # Project back for a sanity check
@@ -485,7 +484,7 @@ class FormPotentialPlotter:
             distances = np.linalg.norm(self.samples[sample_indices,:self.config.num_pca_components] - f_cusp_top,axis=1)
 
             print(f"Distances length {len(distances)}")
-            print(f"Principal components of sample at {cusp_index}: {self.samples[cusp_index,:4]}")
+            print(f"Principal components of sample at {cusp_index}: {self.samples[cusp_index,:3]}")
             print(f"Principal components of inferred cusp: {f_cusp_top}")
 
             distances = distances ** 2
@@ -503,9 +502,12 @@ class FormPotentialPlotter:
     
     
     def _finish_plot(self):
+        print("Finishing and saving plot.")
         plt.legend(loc='lower left')
         for marked_cusp in self.config.marked_cusp_data:
             plt.axvline(x=marked_cusp["influence_start"] * self.slt_config.rlct_config.ed_config.eval_frequency, color='black', linestyle=':', lw=1, alpha=0.1)
             plt.axvline(x=marked_cusp["influence_end"] * self.slt_config.rlct_config.ed_config.eval_frequency, color='black', linestyle=':', lw=1, alpha=0.1)
         plt.xscale('log')
-        plt.savefig("form_potential.png", dpi=300)
+        
+        plt.savefig(self.plot_file_path, dpi=300)
+        

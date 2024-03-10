@@ -103,24 +103,32 @@ class PostRunSLT:
         # SLT stuff
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_criterion = construct_rlct_criterion(self.config)
-        self.logits_file_path = Path(__file__).parent / f"logits/{self.config.run_name}_{self.config.time}"
         self.num_cps_to_analyse = self.steps.iloc[-1] // (self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps)
-        self.ed_logits = None
+        self.ed_projected_samples = None
+
+        self.ed_folder_path = Path(__file__).parent / f"ed_data/{self.config.run_name}_{self.time}"
+        self.ed_folder_path.mkdir(parents=True, exist_ok=True)
 
     
     def do_ed(self):
         """Main executable function of this class."""
-        assert self.slt_config.ed, "Are you sure you want to go ahead and do ED?"
-
         # Choose whether to use logits directly from WandB run or do another inference pass on model states
         ed_logits = self._load_logits_cp() if self.slt_config.use_logits else self._load_logits_states()
-        self.ed_logits: list[torch.Tensor] = self._truncate_ed_logits(ed_logits)
-        ed_projected_samples = self._ed_calculation(self.ed_logits)
+        ed_logits: list[torch.Tensor] = self._truncate_ed_logits(ed_logits)
+        if not os.path.exists(self.ed_folder_path / "pca"):
+            self.ed_projected_samples = self._ed_calculation(ed_logits)
+            torch.save(self.ed_projected_samples, self.ed_folder_path / "pca_projected_samples")
+        else:
+            self.ed_projected_samples = torch.load(self.ed_folder_path / "pca_projected_samples")
 
         # Create and call instance of essential dynamics osculating circle plotter
         if self.slt_config.osculating:
-            steps = np.arange(0, self.ed_logits.shape[0])
-            ed_plotter = EssentialDynamicsPlotter(ed_projected_samples, steps=steps, ed_plot_config=self.slt_config.ed_plot_config, run_name=self.run_name)
+            ed_plotter = EssentialDynamicsPlotter(
+                samples=self.ed_projected_samples, 
+                steps=np.arange(0, ed_logits.shape[0]), 
+                ed_plot_config=self.slt_config.ed_plot_config,
+                run_name=f"{self.config.run_name}_{self.time}"
+            )
             wandb.log({"ed_osculating": wandb.Image("ed_osculating_circles.png")})
     
     
@@ -130,15 +138,19 @@ class PostRunSLT:
 
         Should always be run after ed logit calculation for now.
         """
-        if self.ed_logits is None: # Sometimes this code block comes after ed, so logits already loaded
-            self.ed_logits = self._load_logits_cp() if self.slt_config.use_logits else self._load_logits_states()
+        if self.ed_projected_samples is None: # Sometimes this code block comes after ed, so logits already loaded
+            self.do_ed()
+
         form_potential_plotter = FormPotentialPlotter(
-            samples=self.ed_logits,
+            samples=self.ed_projected_samples,
             steps=self.steps, 
             slt_config=self.slt_config,
             time=self.time,
         )
         form_potential_plotter.plot()
+        form_potential_file = self.ed_folder_path / f"forms/form_potential.png"
+        assert os.path.exists(form_potential_file)
+        wandb.log({"form_potential": wandb.Image(str(form_potential_file))})
 
     
     def _get_config(self) -> MainConfig:
@@ -155,9 +167,10 @@ class PostRunSLT:
     def _load_logits_cp(self) -> torch.Tensor:
         """Load logits from WandB for each checkpoint via multithreading.
         """
-        if os.path.exists(self.logits_file_path):
-            print(f"Loading existing logits from {self.logits_file_path}")
-            ed_logits = torch.load(self.logits_file_path)
+        logits_file_path = self.ed_folder_path / "logits"
+        if os.path.exists(logits_file_path):
+            print(f"Loading existing logits from {logits_file_path}")
+            ed_logits = torch.load(logits_file_path)
             print("Done loading existing logits")
         else:
             ed_logits = torch.zeros((self.num_cps_to_analyse, self.config.rlct_config.ed_config.batches_per_checkpoint * self.config.dataloader_config.train_bs * self.config.task_config.output_vocab_size * self.config.task_config.length))
@@ -176,7 +189,7 @@ class PostRunSLT:
                     future.result()  # Wait for all futures to complete
 
             # assert check_no_zero_rows(ed_logits), "Error in loading ed logits and contains missing data"
-            torch.save(ed_logits, self.logits_file_path)
+            torch.save(ed_logits, logits_file_path)
         
         return ed_logits
 
@@ -274,7 +287,7 @@ class PostRunSLT:
             ed_logits[cp_idx] = logits_cp
             
         except Exception as e:
-            print(f"Error fetching state dict at step {idx}: {e}")
+            print(f"Error fetching state dict at step {cp_idx}: {e}")
         
     
     def _truncate_ed_logits(self, ed_logits: list[torch.Tensor]) -> None:
@@ -328,11 +341,8 @@ class PostRunSLT:
         plot_pca_plotly(pca_projected_samples[:,0], pca_projected_samples[:,1], pca_projected_samples[:,2], self.config)
         plot_explained_var(explained_variance)
 
-        
-        pca_samples_file_path = Path(__file__).parent / f"ed_data/pca_projected_samples_{self.config.run_name}_{self.time}"
-        torch.save(pca_projected_samples, pca_samples_file_path)
-        pca_file_path = Path(__file__).parent / f"ed_data/pca_{self.config.run_name}_{self.time}"
-        torch.save(pca, pca_file_path)
+        torch.save(pca_projected_samples, self.ed_folder_path / "pca_projected_samples")
+        torch.save(pca, self.ed_folder_path / "pca")
 
         wandb.log({
             "ED_PCA_truncated": wandb.Image("PCA.png"),
@@ -403,8 +413,8 @@ class PostRunSLT:
             if upload_cache_dir.is_dir():
                 shutil.rmtree(upload_cache_dir)
                 
-            time.sleep(60)
-            shutil.rmtree("wandb")
+            # time.sleep(60)
+            # shutil.rmtree("wandb")
 
 
 def check_no_zero_rows(tensor: torch.Tensor) -> bool:

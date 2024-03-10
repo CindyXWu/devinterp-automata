@@ -52,6 +52,7 @@ load_dotenv()
 aws_key, aws_secret = os.getenv("AWS_KEY"), os.getenv("AWS_SECRET")
 s3 = s3fs.S3FileSystem(key=aws_key, secret=aws_secret)
 
+
 class Run:
     def __init__(self, config: MainConfig):
         if torch.cuda.is_available():

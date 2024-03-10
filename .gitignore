@@ -16,6 +16,4 @@
 # Files and data
 **/minf-dan.ipynb
 **/.env
-**/logits/*
 **/ed_data/*
-**/forms/*

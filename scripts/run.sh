@@ -12,7 +12,7 @@ ed_train="True"
 
 # Hyperparams
 lr=1e-4
-its=100000
+its=30000
 eval_f=100
 layers=3
 heads=3
@@ -20,7 +20,7 @@ seq_len=25
 
 # RLCT
 chains=5
-ed_eval_f=20
+ed_eval_f=5
 rlct_lr=1e-8
 weight_decay=1e-8
 chain_len=3500

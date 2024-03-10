@@ -32,14 +32,15 @@ from di_automata.mup.optim_params import (
 from di_automata.mup.utils import get_param_name
     
     
-def create_dataloader_hf(config: MainConfig, deterministic: Optional[bool] = False) -> DataLoader:
+def create_dataloader_hf(config: MainConfig, deterministic: Optional[bool] = False, batch_size: Optional[int] = None) -> DataLoader:
     """Load dataset from automata.py.
     
     Note the Automata dataset class automatically handles which instance of which dataclass it is based on the config parameters.
     """
     # Wrap generator with custom IterableDataset which instantiates a new automaton dataset instance per epoch
     iterable_dataset = TorchDatasetFromIterable(config, deterministic)
-    train_loader = DataLoader(iterable_dataset, batch_size=config.dataloader_config.train_bs)
+    bs = batch_size if batch_size is not None else config.dataloader_config.train_bs
+    train_loader = DataLoader(iterable_dataset, batch_size=bs)
     return train_loader
 
 

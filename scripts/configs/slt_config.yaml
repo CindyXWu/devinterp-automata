@@ -20,7 +20,7 @@ early_stop_patience: 5
 early_stop_smoothing_window: 5
 early_stop_acc_threshold: 99.9
 truncate_its: null # Set to null if you want to automatically truncate using above settings
-skip_cps: 2
+skip_cps: 1
 
 n_layers: 3
 n_heads: 3
