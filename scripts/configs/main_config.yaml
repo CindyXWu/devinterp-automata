@@ -11,7 +11,9 @@ use_scratchpad: false
 save_logits_cp: true
 
 model_save_method: wandb
-aws_bucket: s3://automata-devinterp-01/my_checkpoints/
+aws_bucket: 
+  s3://automata-devinterp-01/my_checkpoints/
+  # s3://devinterp-automata/
 
 num_training_iter: 15000
 eval_frequency: 100 # If not specified then use length of dataset (dataloader length)
@@ -100,7 +102,7 @@ tflens_config:
 
 wandb_config:
   log_to_wandb: true
-  wandb_project_name: devinterp-automata
+  wandb_project_name: devinterp
   sweep: false
   entity_name: wu-cindyx
 

@@ -399,8 +399,7 @@ class FormPotentialPlotter:
         self.alpha = 1
         self.cusp_functions = []
         
-        # Change only if you want more than 3 PCA components
-        self.pc_pairs = [[0,1], [0,2], [1,2]]
+        self.pc_pairs = list(itertools.combinations(range(slt_config.num_pca_components), 2))
         
         self._set_matplotlib()
         print("done initialising form potential plotter")

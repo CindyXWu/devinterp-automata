@@ -53,6 +53,7 @@ python-dotenv
 argparse
 pyYAML
 tqdm
+polars
 matplotlib-label-lines
 matplotlib
 plotnine

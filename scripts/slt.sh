@@ -3,13 +3,13 @@
 # This script can optionally manage the main config name via command line passing to Hydra
 SCRIPT_PATH="slt.py"
 
-task="dihedral"
+task="symmetric"
 model=TF_LENS
 
 # Whether to log particular things
 llc="False"
 ed="True"
-osculating="False"
+osculating="True"
 form="True"
 
 run_idx=0

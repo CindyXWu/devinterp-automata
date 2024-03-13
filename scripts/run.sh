@@ -3,7 +3,7 @@
 # This script can optionally manage the main config name via command line passing to Hydra
 SCRIPT_PATH="run.py"
 
-task="parity"
+task="dihedral"
 model_save="aws"
 
 # Whether to log particular things
@@ -11,8 +11,8 @@ llc_train="False"
 ed_train="True"
 
 # Hyperparams
-lr=1e-4
-its=30000
+lr=5e-4
+its=100000
 eval_f=100
 layers=3
 heads=3
@@ -20,7 +20,7 @@ seq_len=25
 
 # RLCT
 chains=5
-ed_eval_f=5
+ed_eval_f=20
 rlct_lr=1e-8
 weight_decay=1e-8
 chain_len=3500

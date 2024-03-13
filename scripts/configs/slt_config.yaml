@@ -2,7 +2,7 @@ defaults:
   - task_config: adder
 
 model_type: TF_LENS
-dataset_type: 'dihedral'
+dataset_type: 'symmetric'
 
 llc: false
 ed: true
