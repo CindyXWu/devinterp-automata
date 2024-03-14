@@ -103,7 +103,8 @@ class PostRunSLT:
         # SLT stuff
         self.rlct_data_list: list[dict[str, float]] = []
         self.rlct_criterion = construct_rlct_criterion(self.config)
-        self.num_cps_to_analyse = self.steps.iloc[-1] // (self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps)
+        truncate_its = self.slt_config.truncate_its if self.slt_config.truncate_its is not None else self.steps.iloc[-1] 
+        self.num_cps_to_analyse = min(self.steps.iloc[-1], truncate_its) // (self.config.rlct_config.ed_config.eval_frequency * self.slt_config.skip_cps)
         self.ed_projected_samples = None
 
         self.ed_folder_path = Path(__file__).parent / f"ed_data/{self.config.run_name}_{self.time}"

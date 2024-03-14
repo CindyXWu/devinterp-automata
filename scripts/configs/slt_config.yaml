@@ -2,7 +2,7 @@ defaults:
   - task_config: adder
 
 model_type: TF_LENS
-dataset_type: 'symmetric'
+dataset_type: 'dihedral'
 
 llc: false
 ed: true
@@ -43,7 +43,7 @@ rlct_config:
 
   ed_config:
     batches_per_checkpoint: 150
-    eval_frequency: 2
+    eval_frequency: 20
 
   sgld_kwargs:
     lr: 5e-8
@@ -60,26 +60,25 @@ rlct_config:
 
 ed_plot_config:
   transitions: 
-    null
+    # null
     # Example (note Dan uses raw steps but I use checkpoint values (?)):
-    # [
-    #   (0, 800, 'L1'),
-    #   (800, 6500, 'L2'),
-    #   (6500, 8500, 'L3'),
-    #   (8500, 17000, 'L4'),
-    #   (17000, 30000, 'L5'),
-    # ]
+    [
+      [0, 130, 'L1'],
+      [130, 400, 'L2'],
+      [400, 700, 'L3'],
+      # [700, 1200, 'L4'],
+    ]
 
-  colors: null  # Example: [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
+  colors: null  # Example: [[255, 0, 0], [0, 255, 0], [0, 0, 255]] - for colouring transitions when transitions not null
   num_pca_components: 3
   plot_caustic: true
   figsize: [20, 6]
   marked_cusp_data: 
     [
     {'step': 220, 'influence_start': 210, 'influence_end': 230},
-    {'step': 520, 'influence_start': 520, 'influence_end': 590},
+    {'step': 530, 'influence_start': 500, 'influence_end': 590},
     {'step': 855, 'influence_start': 837, 'influence_end': 864},
-    {'step': 1150, 'influence_start': 1026, 'influence_end': 1150},
+    # {'step': 1150, 'influence_start': 1026, 'influence_end': 1150},
   ]
   use_cache: false
   num_sharp_points: 10
@@ -87,8 +86,8 @@ ed_plot_config:
   osculate_start: 0
   osculate_end_offset: 0
   osculate_skip: 3
-  smoothing_sigma_early: 100
-  smoothing_sigma_late: 100
+  smoothing_sigma_early: 10
+  smoothing_sigma_late: 20
   smoothing_late_boundary: 100
-  show_vertex_influence: false
+  show_vertex_influence: true
   ed_folder: ed_data

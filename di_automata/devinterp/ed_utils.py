@@ -245,20 +245,19 @@ class EssentialDynamicsPlotter:
         if len(sorted_dcenter_list) > self.config.num_vertices:
             self.dcenter_bound = sorted_dcenter_list[self.config.num_vertices]
         
-        # Plot un-smoothed points in the background
-        # axes[I].scatter(x=samples[:, i], y=samples[:, j], alpha=0.8, color="lightgray", s=10)
-        
         
     def _draw_phases(self, i: int, j: int):
         """Colour each phase on the ED plot with a different line. 
         Should be called inside a loop for i,j and with a particular self.I state.
+
+        Also plot smoothed trajectory and scatter original samples.
         """
         print("Marking phases")
         # If we want to plot phases as separate sections
         if self.config.transitions:
             for k, (start, end, stage) in enumerate(self.config.transitions):
-                start_idx  = self.steps.index(get_nearest_step(self.steps, start))
-                end_idx = self.steps.index(get_nearest_step(self.steps, end)) + 1
+                start_idx = np.where(self.steps == get_nearest_step(self.steps, start))[0][0]
+                end_idx = np.where(self.steps == get_nearest_step(self.steps, end))[0][0] + 1
                 
                 self.axes[self.I].plot(
                     self.smoothed_samples[start_idx :end_idx, 0], 
@@ -272,6 +271,9 @@ class EssentialDynamicsPlotter:
             # Nicer version: smoothed samples
             self.axes[self.I].plot(self.smoothed_samples[:, 0], self.smoothed_samples[:, 1])
             pass
+
+        # Plot un-smoothed points in the background
+        self.axes[self.I].scatter(x=self.samples[:, i], y=self.samples[:, j], alpha=0.2, c=np.arange(len(self.samples)), cmap="viridis", s=5)
 
         # Look for points where distance between neighbouring centres is small i.e. curve is relatively tight
         for t_idx in self.PLOT_RANGE:
@@ -324,8 +326,8 @@ class EssentialDynamicsPlotter:
                 )
 
                 if self.config.show_vertex_influence:
-                    vertex_influence_start = self.marked_cusp_data[marked_cusp_id]["influence_start"]
-                    vertex_influence_end = self.marked_cusp_data[marked_cusp_id]["influence_end"]         
+                    vertex_influence_start = self.config.marked_cusp_data[marked_cusp_id]["influence_start"]
+                    vertex_influence_end = self.config.marked_cusp_data[marked_cusp_id]["influence_end"]         
                     self.axes[self.I].scatter(
                         self.smoothed_samples[vertex_influence_start,0], 
                         self.smoothed_samples[vertex_influence_start,1], 
@@ -399,7 +401,7 @@ class FormPotentialPlotter:
         self.alpha = 1
         self.cusp_functions = []
         
-        self.pc_pairs = list(itertools.combinations(range(slt_config.num_pca_components), 2))
+        self.pc_pairs = list(itertools.combinations(range(slt_config.ed_plot_config.num_pca_components), 2))
         
         self._set_matplotlib()
         print("done initialising form potential plotter")
@@ -417,7 +419,8 @@ class FormPotentialPlotter:
     def _set_matplotlib(self) -> None:
         plt.figure(figsize=(5, 3))
         plt.xlabel(r'Step $t$')
-        plt.ylabel(r'$H_\alpha(w_t)$')
+        # plt.ylabel(r'$H_\alpha(w_t)$')
+        plt.ylabel(r"Form potential $|f - f^*|^2$")
     
     
     def plot(self):
@@ -433,8 +436,10 @@ class FormPotentialPlotter:
         for cusp in self.marked_cusp_data:
             # Unpack cusp
             cusp_index = cusp["step"]
-            influence_start = cusp["influence_start"]
-            influence_end = cusp["influence_end"]
+            # influence_start = cusp["influence_start"]
+            # influence_end = cusp["influence_end"]
+            influence_start = 0
+            influence_end = self.steps.iloc[-1]
             sample_indices = np.arange(int(influence_start * 0.6), min(int(influence_end * 1.5), 1249))
             # sample_indices = np.arange(1, len(self.samples))
         
@@ -493,7 +498,7 @@ class FormPotentialPlotter:
             
             # Smoothed distances are actually distance to 
             # plt.scatter(sample_indices * 100, distances, s=1, alpha=0.01)
-            plt.plot(sample_indices * self.slt_config.rlct_config.ed_config.eval_frequency, smoothed_distances, lw=0.8, label=r'$\alpha = $' + str(alpha))
+            plt.plot(sample_indices * self.slt_config.rlct_config.ed_config.eval_frequency, smoothed_distances, lw=0.8, label=f"form {alpha}")
             
             alpha += 1
         
@@ -502,11 +507,12 @@ class FormPotentialPlotter:
     
     def _finish_plot(self):
         print("Finishing and saving plot.")
-        plt.legend(loc='lower left')
+        plt.legend(loc="upper right")
         for marked_cusp in self.config.marked_cusp_data:
             plt.axvline(x=marked_cusp["influence_start"] * self.slt_config.rlct_config.ed_config.eval_frequency, color='black', linestyle=':', lw=1, alpha=0.1)
             plt.axvline(x=marked_cusp["influence_end"] * self.slt_config.rlct_config.ed_config.eval_frequency, color='black', linestyle=':', lw=1, alpha=0.1)
-        plt.xscale('log')
+        # plt.xscale('log')
         
+        plt.tight_layout()
         plt.savefig(self.plot_file_path, dpi=300)
         
